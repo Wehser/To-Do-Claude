@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mein Planer – Anmelden</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#3b82f6">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="login-body">
+  <form id="login" class="login-card">
+    <img src="/icon.svg" alt="" width="56" height="56">
+    <h1>Mein Planer</h1>
+    <p class="muted">Bitte Passwort eingeben</p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Passwort" required autofocus>
+    <button type="submit" class="btn primary">Anmelden</button>
+    <p id="err" class="error" hidden></p>
+  </form>
+  <script src="/login.js"></script>
+</body>
+</html>

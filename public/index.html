@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Mein Planer</title>
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#3b82f6">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="/icon.svg" alt="" width="28" height="28"> Mein Planer</div>
+    <nav class="tabs" id="tabs">
+      <button data-view="day" class="active">Tag</button>
+      <button data-view="week">Woche</button>
+      <button data-view="routines">Routinen</button>
+      <button data-view="study">Lernplan</button>
+      <button data-view="work">Arbeitszeit</button>
+      <button data-view="settings">Einstellungen</button>
+    </nav>
+    <span id="sync" class="sync" title="Speicherstatus">●</span>
+  </header>
+
+  <main id="main"></main>
+
+  <button id="fab" class="fab" title="Neues To-Do">+</button>
+
+  <dialog id="modal">
+    <form id="modal-form" method="dialog">
+      <h2 id="modal-title"></h2>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn danger" id="modal-delete" hidden>Löschen</button>
+        <span class="spacer"></span>
+        <button type="button" class="btn" id="modal-cancel">Abbrechen</button>
+        <button type="submit" class="btn primary" id="modal-ok">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/app.js"></script>
+</body>
+</html>

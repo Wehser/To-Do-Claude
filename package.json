@@ -1,0 +1,17 @@
+{
+  "name": "mein-planer",
+  "version": "1.0.0",
+  "description": "Passwortgeschützter Tagesplaner mit Routinen, To-Dos, Time-Slots, Lernplan und Arbeitszeiten",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "optionalDependencies": {
+    "pg": "^8.11.3"
+  },
+  "license": "MIT"
+}
