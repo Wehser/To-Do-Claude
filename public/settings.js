@@ -285,10 +285,11 @@ VIEWS.settings = function renderSettings(main) {
   main.append(gen);
 
   main.append(h('section', { class: 'card' }, h('h3', null, '💾 Datensicherung'),
-    h('p', { class: 'muted' }, 'Lade regelmäßig eine Sicherung herunter. Damit kannst du deine Daten jederzeit wiederherstellen.'),
+    h('p', { class: 'muted' }, 'Lade regelmäßig eine Sicherung herunter. Damit kannst du deine Daten jederzeit wiederherstellen. „Daten hinzufügen“ ergänzt Einträge aus einer Datei (z. B. von Claude erstellt), ohne Vorhandenes zu löschen.'),
     h('div', { class: 'row-actions' },
       h('button', { class: 'btn', onclick: () => download('planer-backup-' + today() + '.json', JSON.stringify(DB, null, 2), 'application/json') }, '⬇ Backup herunterladen'),
-      h('button', { class: 'btn', onclick: importBackup }, '⬆ Backup einspielen'),
+      h('button', { class: 'btn primary', onclick: importMerge }, '➕ Daten hinzufügen'),
+      h('button', { class: 'btn', onclick: importBackup }, '⬆ Backup einspielen (ersetzt alles)'),
       h('button', { class: 'btn', onclick: () => {
         const cutoff = addDays(today(), -60);
         const before = DB.todos.length;
@@ -315,6 +316,82 @@ function importBackup() {
     } catch (_) {
       toast('Die Datei ist kein gültiges Backup.');
     }
+  });
+  inp.click();
+}
+
+// ===========================================================================
+// Daten hinzufügen (Zusammenführen statt Ersetzen)
+// ===========================================================================
+const MERGE_LISTS = { routines: 'Routinen', todos: 'To-Dos', exams: 'Prüfungen', work: 'Arbeitszeiten', grades: 'Noten', focus: 'Lernzeiten', calendars: 'Kalender' };
+
+/** Ordnet Bereichsangaben (ID oder Name) vorhandenen Bereichen zu und legt fehlende an. */
+function resolveArea(ref, fileAreas, created) {
+  if (!ref) return undefined;
+  if (DB.areas.some((a) => a.id === ref)) return ref;
+  const fromFile = (fileAreas || []).find((a) => a.id === ref || (a.name || '').toLowerCase() === String(ref).toLowerCase());
+  const name = fromFile ? fromFile.name : String(ref);
+  const existing = DB.areas.find((a) => a.name.toLowerCase() === name.toLowerCase());
+  if (existing) return existing.id;
+  const a = { id: uid(), name, color: (fromFile && fromFile.color) || '#0ea5e9' };
+  DB.areas.push(a);
+  created.push(name);
+  return a.id;
+}
+
+function mergeData(data) {
+  const report = { added: {}, updated: {}, areas: [] };
+  const today0 = today();
+  const fixups = {
+    routines: (r) => ({ weekdays: [0, 1, 2, 3, 4, 5, 6], createdAt: today0, notes: '', ...r }),
+    todos: (t) => ({ done: false, priority: 'normal', notes: '', subtasks: [], ...t, subtasks: (t.subtasks || []).map((st) => ({ id: uid(), done: false, ...(typeof st === 'string' ? { title: st } : st) })) }),
+    exams: (x) => ({ type: 'Prüfung', ...x }),
+    work: (w) => ({ pause: 0, note: '', ...w }),
+    grades: (g) => ({ ...g }),
+    focus: (f) => ({ manual: true, ...f }),
+    calendars: (c) => ({ events: [], ...c }),
+  };
+  for (const [key, label] of Object.entries(MERGE_LISTS)) {
+    if (!Array.isArray(data[key])) continue;
+    for (const raw of data[key]) {
+      if (!raw || typeof raw !== 'object') continue;
+      const item = fixups[key]({ id: uid(), ...raw });
+      if ('areaId' in item || item.area) { item.areaId = resolveArea(item.areaId || item.area, data.areas, report.areas); delete item.area; }
+      const idx = DB[key].findIndex((x) => x.id === item.id);
+      if (idx >= 0) { DB[key][idx] = { ...DB[key][idx], ...item }; report.updated[label] = (report.updated[label] || 0) + 1; }
+      else { DB[key].push(item); report.added[label] = (report.added[label] || 0) + 1; }
+    }
+  }
+  // Bereiche aus der Datei übernehmen, auch wenn sie (noch) nicht benutzt werden
+  for (const a of data.areas || []) resolveArea(a.id || a.name, data.areas, report.areas);
+  if (data.routineChecks && typeof data.routineChecks === 'object') {
+    for (const [d, v] of Object.entries(data.routineChecks)) DB.routineChecks[d] = { ...(DB.routineChecks[d] || {}), ...v };
+  }
+  if (data.notes && typeof data.notes === 'object') for (const [d, v] of Object.entries(data.notes)) DB.notes[d] = DB.notes[d] ? DB.notes[d] + '\n' + v : v;
+  return report;
+}
+
+function importMerge() {
+  const inp = h('input', { type: 'file', accept: 'application/json,.json' });
+  inp.addEventListener('change', async () => {
+    let data;
+    try {
+      data = JSON.parse(await inp.files[0].text());
+      if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Format');
+    } catch (_) { toast('Die Datei konnte nicht gelesen werden (kein gültiges JSON).', 5000); return; }
+    const counts = Object.entries(MERGE_LISTS).filter(([k]) => Array.isArray(data[k]) && data[k].length).map(([k, l]) => data[k].length + ' ' + l);
+    if (!counts.length) { toast('In der Datei wurden keine Einträge gefunden.', 5000); return; }
+    const body = h('div', { class: 'form' },
+      h('p', null, 'Folgendes wird zu deinen Daten hinzugefügt:'),
+      h('ul', null, counts.map((c) => h('li', null, c))),
+      h('p', { class: 'muted' }, 'Vorhandene Einträge bleiben erhalten. Einträge mit gleicher ID werden aktualisiert. Vorher wird automatisch ein Backup heruntergeladen.'));
+    openModal('Daten hinzufügen', body, () => {
+      download('planer-backup-vor-import-' + today() + '.json', JSON.stringify(DB, null, 2), 'application/json');
+      const r = mergeData(data);
+      persist();
+      const fmt = (o) => Object.entries(o).map(([l, n]) => n + ' ' + l).join(', ');
+      toast('✓ Hinzugefügt: ' + (fmt(r.added) || 'nichts') + (Object.keys(r.updated).length ? ' · aktualisiert: ' + fmt(r.updated) : '') + (r.areas.length ? ' · neue Bereiche: ' + r.areas.join(', ') : ''), 7000);
+    }, null, 'Hinzufügen');
   });
   inp.click();
 }
