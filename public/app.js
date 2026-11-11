@@ -1,40 +1,31 @@
 'use strict';
-/* Mein Planer – Frontend (ohne Frameworks) */
+/* Mein Planer – Kern: Daten, Synchronisation, Tag/Woche/Routinen/Arbeitszeit, Dialoge.
+   Datumsfunktionen (ymd, addDays, toMin …) kommen aus shared.js. */
 
 // ===========================================================================
 // Hilfsfunktionen
 // ===========================================================================
 const $ = (sel, root = document) => root.querySelector(sel);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-const pad = (n) => String(n).padStart(2, '0');
 const WD_ORDER = [1, 2, 3, 4, 5, 6, 0];
 const WD_SHORT = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
 const WD_LONG = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 const MONTHS = ['Januar', 'Februar', 'März', 'April', 'Mai', 'Juni', 'Juli', 'August', 'September', 'Oktober', 'November', 'Dezember'];
 
-function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
-function parseYmd(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
-function addDays(s, n) { const d = parseYmd(s); d.setDate(d.getDate() + n); return ymd(d); }
 function today() { return ymd(new Date()); }
-function weekday(s) { return parseYmd(s).getDay(); }
-function mondayOf(s) { const wd = weekday(s); return addDays(s, wd === 0 ? -6 : 1 - wd); }
-function daysBetween(a, b) { return Math.round((parseYmd(b) - parseYmd(a)) / 86400000); }
-function toMin(t) { if (!t) return null; const [h, m] = t.split(':').map(Number); return h * 60 + m; }
-function fromMin(m) { return pad(Math.floor(m / 60) % 24) + ':' + pad(m % 60); }
+function nowMin() { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); }
 function fmtDate(s, opts = {}) {
   const d = parseYmd(s);
   const base = d.getDate() + '. ' + MONTHS[d.getMonth()] + (opts.year ? ' ' + d.getFullYear() : '');
   return opts.weekday === false ? base : WD_LONG[d.getDay()] + ', ' + base;
 }
 function fmtShort(s) { const d = parseYmd(s); return WD_SHORT[d.getDay()] + ' ' + d.getDate() + '.' + (d.getMonth() + 1) + '.'; }
-function fmtHours(min) { const h = Math.floor(min / 60), m = min % 60; return h + ':' + pad(m) + ' h'; }
+function fmtHours(min) { min = Math.round(min); const h = Math.floor(min / 60), m = min % 60; return h + ':' + pad(m) + ' h'; }
 function relDay(s) {
   const diff = daysBetween(today(), s);
-  if (diff === 0) return 'Heute';
-  if (diff === 1) return 'Morgen';
-  if (diff === -1) return 'Gestern';
-  return null;
+  return { 0: 'Heute', 1: 'Morgen', '-1': 'Gestern' }[diff] || null;
 }
+function durOf(i) { const s = toMin(i.start), e = toMin(i.end); return s !== null && e !== null && e > s ? e - s : 0; }
 
 /** Element-Builder: h('div', {class: 'x', onclick: fn}, 'Text', child) – Texte werden immer sicher eingefügt. */
 function h(tag, attrs, ...children) {
@@ -43,8 +34,9 @@ function h(tag, attrs, ...children) {
     for (const [k, v] of Object.entries(attrs)) {
       if (v === null || v === undefined || v === false) continue;
       if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
-      else if (k === 'style' && typeof v === 'object') for (const [sk, sv] of Object.entries(v)) el.style.setProperty(sk.startsWith('--') ? sk : sk.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()), sv);
-      else if (k === 'dataset') Object.assign(el.dataset, v);
+      else if (k === 'style' && typeof v === 'object') {
+        for (const [sk, sv] of Object.entries(v)) el.style.setProperty(sk.startsWith('--') ? sk : sk.replace(/[A-Z]/g, (c) => '-' + c.toLowerCase()), sv);
+      } else if (k === 'dataset') Object.assign(el.dataset, v);
       else if (k in el && typeof v !== 'string') el[k] = v;
       else el.setAttribute(k, v === true ? '' : v);
     }
@@ -56,7 +48,7 @@ function h(tag, attrs, ...children) {
   return el;
 }
 
-function toast(msg, ms = 2500) {
+function toast(msg, ms = 3000) {
   const t = $('#toast');
   t.textContent = msg;
   t.hidden = false;
@@ -64,9 +56,47 @@ function toast(msg, ms = 2500) {
   toast._t = setTimeout(() => (t.hidden = true), ms);
 }
 
+async function api(path, opts = {}) {
+  const r = await fetch(path, {
+    method: opts.method || 'GET',
+    headers: opts.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    cache: 'no-store',
+  });
+  if (r.status === 401) { location.href = '/login'; throw new Error('401'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'HTTP ' + r.status);
+  return j;
+}
+
 // ===========================================================================
 // Daten & Synchronisation
 // ===========================================================================
+function defaultSettings() {
+  return {
+    dayStart: 6,
+    dayEnd: 23,
+    weeklyWorkTarget: 20,
+    hourlyWage: 0,
+    ectsTarget: 180,
+    colors: { routine: '#3b82f6', todo: '#f59e0b', work: '#10b981', study: '#8b5cf6', event: '#0891b2' },
+    theme: 'auto',
+    timezone: '',
+    pomodoro: { focus: 25, short: 5, long: 15, longEvery: 4, sound: true },
+    notify: {
+      todo: { on: true, min: 10 },
+      routine: { on: true, min: 5 },
+      study: { on: true, min: 10 },
+      work: { on: true, min: 30 },
+      event: { on: true, min: 15 },
+      morning: { on: true, time: '07:30' },
+      evening: { on: false, time: '21:00' },
+      exams: { on: true, days: '14,7,3,1' },
+      quiet: { on: false, from: '22:00', to: '07:00' },
+    },
+  };
+}
+
 function defaultData() {
   return {
     areas: [
@@ -81,14 +111,10 @@ function defaultData() {
     exams: [],
     work: [],
     notes: {},
-    settings: {
-      dayStart: 6,
-      dayEnd: 23,
-      weeklyWorkTarget: 20,
-      hourlyWage: 0,
-      colors: { routine: '#3b82f6', todo: '#f59e0b', work: '#10b981', study: '#8b5cf6' },
-      theme: 'auto',
-    },
+    focus: [],
+    calendars: [],
+    grades: [],
+    settings: defaultSettings(),
   };
 }
 
@@ -99,26 +125,31 @@ let saveTimer = null;
 let saving = false;
 
 function normalize(d) {
-  const base = defaultData();
-  const out = Object.assign(base, d || {});
-  out.settings = Object.assign(defaultData().settings, (d && d.settings) || {});
-  out.settings.colors = Object.assign(defaultData().settings.colors, (d && d.settings && d.settings.colors) || {});
+  const out = Object.assign(defaultData(), d || {});
+  const ds = defaultSettings();
+  const s = (d && d.settings) || {};
+  out.settings = Object.assign(ds, s);
+  out.settings.colors = Object.assign(defaultSettings().colors, s.colors || {});
+  out.settings.pomodoro = Object.assign(defaultSettings().pomodoro, s.pomodoro || {});
+  const n = defaultSettings().notify;
+  for (const k of Object.keys(n)) n[k] = Object.assign(n[k], (s.notify || {})[k] || {});
+  out.settings.notify = n;
   return out;
 }
 
-function setSync(state, title) {
+function setSync(st, title) {
   const s = $('#sync');
-  s.className = 'sync ' + state;
+  s.className = 'sync ' + st;
   s.title = title;
 }
 
 async function load() {
-  const r = await fetch('/api/data', { cache: 'no-store' });
-  if (r.status === 401) return (location.href = '/login');
-  const j = await r.json();
+  const j = await api('/api/data');
   version = j.version || 0;
   DB = normalize(j.data);
   setSync('ok', 'Gespeichert');
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  if (tz && DB.settings.timezone !== tz) { DB.settings.timezone = tz; persist(); }
 }
 
 function persist() {
@@ -164,7 +195,7 @@ async function saveNow() {
 
 // Wenn die App wieder in den Vordergrund kommt: Änderungen anderer Geräte holen
 async function refreshIfIdle() {
-  if (dirty || saving || document.hidden) return;
+  if (dirty || saving || document.hidden || $('#modal').open || dragActive) return;
   try {
     const r = await fetch('/api/data', { cache: 'no-store' });
     if (!r.ok) return;
@@ -185,41 +216,20 @@ window.addEventListener('beforeunload', (e) => { if (dirty) { saveNow(); e.preve
 // ===========================================================================
 const area = (id) => DB.areas.find((a) => a.id === id);
 const exam = (id) => DB.exams.find((x) => x.id === id);
-
-function routineActive(r, date) {
-  if (!r.weekdays.includes(weekday(date))) return false;
-  if (r.startDate && date < r.startDate) return false;
-  if (r.endDate && date > r.endDate) return false;
-  return true;
-}
+const todoById = (id) => DB.todos.find((t) => t.id === id);
 
 function routineState(rid, date) { return (DB.routineChecks[date] || {})[rid] || null; }
 
-function setRoutineState(rid, date, state) {
+function setRoutineState(rid, date, st) {
   const day = DB.routineChecks[date] || (DB.routineChecks[date] = {});
-  if (state) day[rid] = state; else delete day[rid];
+  if (st) day[rid] = st; else delete day[rid];
   if (!Object.keys(day).length) delete DB.routineChecks[date];
   persist();
 }
 
-/** Alle Einträge eines Tages in einheitlicher Form. */
 function itemsFor(date, filterArea = null) {
-  const items = [];
-  for (const r of DB.routines) {
-    if (!routineActive(r, date)) continue;
-    const st = routineState(r.id, date);
-    items.push({ kind: 'routine', ref: r, title: r.title, start: r.start, end: r.end, areaId: r.areaId, done: st === 'done', skipped: st === 'skip', notes: r.notes });
-  }
-  for (const t of DB.todos) {
-    if (t.date !== date) continue;
-    items.push({ kind: t.examId ? 'study' : 'todo', ref: t, title: t.title, start: t.start, end: t.end, areaId: t.areaId, done: !!t.done, priority: t.priority, notes: t.notes });
-  }
-  for (const w of DB.work) {
-    if (w.date !== date) continue;
-    items.push({ kind: 'work', ref: w, title: w.note ? 'Arbeit: ' + w.note : 'Arbeit', start: w.start, end: w.end, areaId: 'arbeit', done: false, isWork: true });
-  }
-  const filtered = filterArea ? items.filter((i) => i.areaId === filterArea) : items;
-  return filtered.sort((a, b) => (toMin(a.start) ?? 9999) - (toMin(b.start) ?? 9999) || a.title.localeCompare(b.title));
+  const items = itemsForDate(DB, date);
+  return filterArea ? items.filter((i) => i.areaId === filterArea) : items;
 }
 
 function overdueTodos() {
@@ -227,19 +237,19 @@ function overdueTodos() {
   return DB.todos.filter((x) => !x.done && x.date < t).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-function toggleItem(item) {
-  if (item.kind === 'routine') setRoutineState(item.ref.id, state.date, item.done ? null : 'done');
-  else if (!item.isWork) { item.ref.done = !item.ref.done; persist(); }
+function toggleItem(item, date = state.date) {
+  if (item.kind === 'routine') setRoutineState(item.ref.id, date, item.done ? null : 'done');
+  else if (!item.readonly) { item.ref.done = !item.ref.done; persist(); }
   render();
 }
 
 function routineStreak(r) {
   let n = 0;
   let d = today();
-  // Heute zählt nur, wenn schon erledigt
   if (routineActive(r, d) && routineState(r.id, d) !== 'done') d = addDays(d, -1);
   for (let i = 0; i < 366; i++) {
     if (r.startDate && d < r.startDate) break;
+    if (r.createdAt && d < r.createdAt) break;
     if (routineActive(r, d)) {
       const st = routineState(r.id, d);
       if (st === 'done') n++;
@@ -250,6 +260,38 @@ function routineStreak(r) {
   return n;
 }
 
+/** Freie Zeitfenster eines Tages (in Minuten) zwischen dayStart und dayEnd. */
+function freeSlots(date, minLen = 30, excludeRef = null) {
+  const busy = itemsForDate(DB, date)
+    .filter((i) => i.start && !i.skipped && i.ref !== excludeRef)
+    .map((i) => { const s = toMin(i.start); let e = toMin(i.end); if (e === null || e <= s) e = s + 30; return [s, e]; })
+    .sort((a, b) => a[0] - b[0]);
+  let cur = DB.settings.dayStart * 60;
+  if (date === today()) cur = Math.max(cur, Math.ceil(nowMin() / 15) * 15);
+  const end = DB.settings.dayEnd * 60;
+  const out = [];
+  for (const [s, e] of busy) {
+    if (s - cur >= minLen) out.push([cur, Math.min(s, end)]);
+    cur = Math.max(cur, e);
+    if (cur >= end) break;
+  }
+  if (end - cur >= minLen) out.push([cur, end]);
+  return out.filter(([s, e]) => e - s >= minLen);
+}
+
+/** Nächster freier Startzeitpunkt ab prefStart für die Dauer dur (Minuten). */
+function findFreeSlot(date, dur, prefStart, excludeRef = null) {
+  const dayS = DB.settings.dayStart * 60, dayE = DB.settings.dayEnd * 60;
+  const tryAt = (s) => conflictsAt(DB, date, fromMin(s), fromMin(s + dur), excludeRef).length === 0;
+  for (let s = Math.max(prefStart, dayS); s + dur <= dayE; s += 15) if (tryAt(s)) return s;
+  for (let s = dayS; s < prefStart && s + dur <= dayE; s += 15) if (tryAt(s)) return s;
+  return null;
+}
+
+function conflictText(list) {
+  return list.map((i) => i.title + ' (' + i.start + (i.end ? '–' + i.end : '') + ')').join(', ');
+}
+
 // ===========================================================================
 // Zustand der Oberfläche
 // ===========================================================================
@@ -257,12 +299,16 @@ const state = {
   view: localStorage.getItem('planer.view') || 'day',
   date: today(),
   areaFilter: null,
+  expanded: new Set(),
 };
+const VIEWS = {};
+let dragActive = false;
 
 function setView(v) {
   state.view = v;
   try { localStorage.setItem('planer.view', v); } catch (_) { /* egal */ }
   render();
+  window.scrollTo(0, 0);
 }
 
 $('#tabs').addEventListener('click', (e) => {
@@ -270,19 +316,14 @@ $('#tabs').addEventListener('click', (e) => {
   if (b) setView(b.dataset.view);
 });
 $('#fab').addEventListener('click', () => {
-  if (state.view === 'routines') editRoutine();
-  else if (state.view === 'study') editExam();
-  else if (state.view === 'work') editWork({ date: state.date });
-  else editTodo({ date: state.date });
+  const fabActions = { routines: () => editRoutine(), study: () => editExam(), work: () => editWork({ date: state.date }), grades: () => editGrade() };
+  (fabActions[state.view] || (() => editTodo({ date: state.date })))();
 });
 
 function applyTheme() {
   const c = DB.settings.colors;
   const root = document.documentElement;
-  root.style.setProperty('--c-routine', c.routine);
-  root.style.setProperty('--c-todo', c.todo);
-  root.style.setProperty('--c-work', c.work);
-  root.style.setProperty('--c-study', c.study);
+  for (const k of Object.keys(c)) root.style.setProperty('--c-' + k, c[k]);
   root.dataset.theme = DB.settings.theme || 'auto';
 }
 
@@ -291,15 +332,15 @@ function render() {
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('active', b.dataset.view === state.view));
   const main = $('#main');
   main.replaceChildren();
-  const views = { day: renderDay, week: renderWeek, routines: renderRoutines, study: renderStudy, work: renderWork, settings: renderSettings };
-  (views[state.view] || renderDay)(main);
-  $('#fab').hidden = state.view === 'settings';
+  (VIEWS[state.view] || VIEWS.day)(main);
+  $('#fab').hidden = state.view === 'settings' || state.view === 'dashboard';
+  if (typeof renderTimerWidget === 'function') renderTimerWidget();
 }
 
 // ===========================================================================
 // Gemeinsame UI-Bausteine
 // ===========================================================================
-const KIND_LABEL = { routine: 'Routine', todo: 'To-Do', study: 'Lernen', work: 'Arbeit' };
+const KIND_LABEL = { routine: 'Routine', todo: 'To-Do', study: 'Lernen', work: 'Arbeit', event: 'Termin' };
 
 function areaChip(id) {
   const a = area(id);
@@ -330,55 +371,151 @@ function areaFilterBar() {
 }
 
 function legend() {
-  return h('div', { class: 'legend' },
-    ['routine', 'todo', 'study', 'work'].map((k) => h('span', { class: 'legend-item k-' + k }, h('i'), KIND_LABEL[k])));
+  const kinds = ['routine', 'todo', 'study', 'work'];
+  if (DB.calendars.length) kinds.push('event');
+  return h('div', { class: 'legend' }, kinds.map((k) => h('span', { class: 'legend-item k-' + k }, h('i'), KIND_LABEL[k])));
 }
 
 function openItem(item) {
   if (item.kind === 'routine') editRoutine(item.ref);
   else if (item.kind === 'work') editWork(item.ref);
+  else if (item.kind === 'event') showEvent(item);
   else editTodo(item.ref);
 }
 
+function showEvent(item) {
+  const e = item.ref;
+  openModal(item.title, h('div', { class: 'form' },
+    h('p', null, fmtDate(e.date, { year: true }) + (e.start ? ', ' + e.start + (e.end ? '–' + e.end : '') : ' (ganztägig)')),
+    e.location ? h('p', null, '📍 ' + e.location) : null,
+    e.description ? h('p', { class: 'topics' }, e.description) : null,
+    h('p', { class: 'muted' }, 'Importiert aus Kalender „' + item.cal.name + '“. Änderungen bitte im Ursprungskalender vornehmen.')),
+  null, null, 'Schließen');
+}
+
+function subtaskProgress(t) {
+  const st = t.subtasks || [];
+  return st.length ? st.filter((s) => s.done).length + '/' + st.length : null;
+}
+
 function itemRow(item, opts = {}) {
+  const date = opts.date || state.date;
+  const t = item.ref;
   const row = h('div', { class: 'item k-' + item.kind + (item.done ? ' done' : '') + (item.skipped ? ' skipped' : '') });
-  if (!item.isWork) {
-    row.append(h('input', { type: 'checkbox', class: 'check', checked: item.done, disabled: item.skipped, onclick: (e) => { e.stopPropagation(); toggleItem(item); }, title: 'Erledigt' }));
-  } else row.append(h('span', { class: 'check-placeholder' }, '⏱'));
+  if (!item.readonly) {
+    row.append(h('input', { type: 'checkbox', class: 'check', checked: item.done, disabled: item.skipped, onclick: (e) => { e.stopPropagation(); toggleItem(item, date); }, title: 'Erledigt' }));
+  } else row.append(h('span', { class: 'check-placeholder' }, item.kind === 'event' ? '📅' : '⏱'));
   const time = item.start ? item.start + (item.end ? '–' + item.end : '') : '';
-  const ex = item.ref.examId ? exam(item.ref.examId) : null;
+  const ex = t.examId ? exam(t.examId) : null;
+  const sp = (item.kind === 'todo' || item.kind === 'study') ? subtaskProgress(t) : null;
+  const expanded = state.expanded.has(t.id);
   row.append(h('div', { class: 'item-main', onclick: () => openItem(item) },
     h('div', { class: 'item-title' },
       item.priority === 'hoch' ? h('span', { class: 'prio', title: 'Hohe Priorität' }, '!') : null,
       item.title),
     h('div', { class: 'item-meta' },
       time ? h('span', null, time) : null,
-      opts.showDate && item.ref.date ? h('span', null, fmtShort(item.ref.date)) : null,
+      opts.showDate && t.date ? h('span', null, fmtShort(t.date)) : null,
       h('span', { class: 'kind-label' }, KIND_LABEL[item.kind]),
       ex ? h('span', null, '📚 ' + ex.subject) : null,
+      sp ? h('button', { class: 'sub-toggle', title: 'Unteraufgaben anzeigen', onclick: (e) => { e.stopPropagation(); expanded ? state.expanded.delete(t.id) : state.expanded.add(t.id); render(); } }, (expanded ? '▾ ' : '▸ ') + '☑ ' + sp) : null,
+      item.location ? h('span', null, '📍 ' + item.location) : null,
       areaChip(item.areaId),
       item.skipped ? h('span', null, 'übersprungen') : null)));
+  if ((item.kind === 'todo' || item.kind === 'study') && !item.done && typeof startFocus === 'function') {
+    row.append(h('button', { class: 'btn icon small', title: 'Fokus-Timer (Pomodoro) für diese Aufgabe starten', onclick: (e) => { e.stopPropagation(); startFocus({ todoId: t.id, examId: t.examId, areaId: t.areaId, title: t.title }); } }, '▶'));
+  }
   if (item.kind === 'routine') {
     row.append(h('button', {
       class: 'btn icon small', title: item.skipped ? 'Wieder aktivieren' : 'Heute überspringen',
-      onclick: (e) => { e.stopPropagation(); setRoutineState(item.ref.id, state.date, item.skipped ? null : 'skip'); render(); },
+      onclick: (e) => { e.stopPropagation(); setRoutineState(item.ref.id, date, item.skipped ? null : 'skip'); render(); },
     }, item.skipped ? '↺' : '⤼'));
   }
   if (opts.extra) row.append(opts.extra);
-  return row;
+  if (!sp || !expanded) return row;
+  const wrap = h('div', { class: 'item-wrap' }, row);
+  const list = h('div', { class: 'subtasks k-' + item.kind });
+  for (const s of t.subtasks) {
+    list.append(h('label', { class: 'subtask' + (s.done ? ' done' : '') },
+      h('input', { type: 'checkbox', checked: s.done, onchange: () => {
+        s.done = !s.done;
+        if (t.subtasks.every((x) => x.done) && !t.done) { t.done = true; toast('Alle Unteraufgaben erledigt – To-Do abgehakt ✓'); }
+        else if (!s.done && t.done) t.done = false;
+        persist(); render();
+      } }), h('span', null, s.title)));
+  }
+  wrap.append(list);
+  return wrap;
+}
+
+// ===========================================================================
+// Ziehen & Ablegen (Maus sofort, Touch nach langem Drücken)
+// ===========================================================================
+function makeDraggable(el, handlers) {
+  let sx = 0, sy = 0, active = false, pending = false, timer = null, suppress = false;
+  const begin = (x, y) => { active = true; dragActive = true; el.classList.add('dragging'); handlers.onStart && handlers.onStart(); };
+  const finish = (x, y) => {
+    clearTimeout(timer);
+    pending = false;
+    if (!active) return;
+    active = false;
+    dragActive = false;
+    suppress = true;
+    setTimeout(() => (suppress = false), 50);
+    handlers.onEnd(x - sx, y - sy, x, y); // vor dem Entfernen von .dragging, damit elementFromPoint das Ziel findet
+    el.classList.remove('dragging');
+  };
+  el.addEventListener('click', (e) => { if (suppress) { e.stopPropagation(); e.preventDefault(); suppress = false; } }, true);
+  // Maus / Stift
+  el.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch' || e.button !== 0 || e.target.closest('input,button:not(.drag-ok)')) return;
+    e.stopPropagation(); // verschachtelte Ziehflächen (z. B. Größen-Griff im Termin) nicht doppelt auslösen
+    sx = e.clientX; sy = e.clientY; pending = true;
+    const move = (ev) => {
+      if (pending && !active && Math.hypot(ev.clientX - sx, ev.clientY - sy) > 4) begin();
+      if (active) { ev.preventDefault(); handlers.onMove(ev.clientX - sx, ev.clientY - sy, ev.clientX, ev.clientY); }
+    };
+    const up = (ev) => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); finish(ev.clientX, ev.clientY); };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+  // Touch: langes Drücken (350 ms) startet das Ziehen, sonst normal scrollen
+  el.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1 || e.target.closest('input,button:not(.drag-ok)')) return;
+    e.stopPropagation();
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; pending = true;
+    timer = setTimeout(() => { if (pending) { begin(); if (navigator.vibrate) navigator.vibrate(15); } }, 350);
+  }, { passive: true });
+  el.addEventListener('touchmove', (e) => {
+    const t = e.touches[0];
+    if (active) { e.preventDefault(); handlers.onMove(t.clientX - sx, t.clientY - sy, t.clientX, t.clientY); }
+    else if (pending && Math.hypot(t.clientX - sx, t.clientY - sy) > 8) { clearTimeout(timer); pending = false; }
+  }, { passive: false });
+  el.addEventListener('touchend', (e) => {
+    const t = e.changedTouches[0];
+    if (active) e.preventDefault();
+    finish(t.clientX, t.clientY);
+  });
+  el.addEventListener('touchcancel', () => { clearTimeout(timer); pending = false; if (active) { active = false; dragActive = false; el.classList.remove('dragging'); render(); } });
+  el.addEventListener('contextmenu', (e) => { if (active || pending) e.preventDefault(); });
+}
+
+function warnConflicts(date, start, end, ref) {
+  const c = conflictsAt(DB, date, start, end, ref);
+  if (c.length) toast('⚠ Überschneidung mit: ' + conflictText(c), 4500);
 }
 
 // ===========================================================================
 // Tagesansicht
 // ===========================================================================
-function renderDay(main) {
+VIEWS.day = function renderDay(main) {
   const d = state.date;
   const items = itemsFor(d, state.areaFilter);
   const label = (relDay(d) ? relDay(d) + ' · ' : '') + fmtDate(d, { year: true });
   main.append(dateNav(label, () => { state.date = addDays(d, -1); render(); }, () => { state.date = addDays(d, 1); render(); }, () => { state.date = today(); render(); }));
   main.append(areaFilterBar());
 
-  const checkable = items.filter((i) => !i.isWork && !i.skipped);
+  const checkable = items.filter((i) => !i.readonly && !i.skipped);
   const done = checkable.filter((i) => i.done).length;
   const pct = checkable.length ? Math.round((done / checkable.length) * 100) : 0;
   main.append(h('div', { class: 'progress-wrap' },
@@ -386,22 +523,34 @@ function renderDay(main) {
     h('span', { class: 'muted' }, `${done} von ${checkable.length} erledigt`)));
 
   const layout = h('div', { class: 'day-layout' });
-  layout.append(timeline(d, items.filter((i) => i.start)));
+  const tl = h('div', null, timeline(d, items.filter((i) => i.start)));
+  tl.append(h('p', { class: 'muted hint' }, 'Tipp: In eine freie Stunde klicken = neues To-Do. To-Dos ziehen = verschieben, unteren Rand ziehen = Dauer ändern (am Handy: kurz gedrückt halten).'));
+  layout.append(tl);
 
   const side = h('div', { class: 'day-side' });
-  // Überfällige To-Dos
   if (d === today()) {
     const od = overdueTodos();
     if (od.length) {
       const box = h('section', { class: 'card warn' }, h('h3', null, `Überfällig (${od.length})`));
       for (const t of od) {
         const it = { kind: t.examId ? 'study' : 'todo', ref: t, title: t.title, start: t.start, end: t.end, areaId: t.areaId, done: false, priority: t.priority };
-        box.append(itemRow(it, { showDate: true, extra: h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); t.date = today(); persist(); render(); } }, '→ heute') }));
+        box.append(itemRow(it, { showDate: true, extra: h('button', { class: 'btn small', onclick: (e) => { e.stopPropagation(); moveToToday(t); } }, '→ heute') }));
       }
-      if (od.length > 1) box.append(h('button', { class: 'btn small', onclick: () => { od.forEach((t) => (t.date = today())); persist(); render(); } }, 'Alle auf heute verschieben'));
+      if (od.length > 1) box.append(h('button', { class: 'btn small', onclick: () => { od.forEach((t) => moveToToday(t, true)); persist(); render(); } }, 'Alle auf heute verschieben'));
       side.append(box);
     }
   }
+
+  // Freie Zeitfenster
+  const slots = freeSlots(d, 30);
+  const freeBox = h('section', { class: 'card' }, h('h3', null, 'Freie Zeitfenster'));
+  if (!slots.length) freeBox.append(h('p', { class: 'muted' }, 'Keine freien Zeitfenster ab 30 Minuten.'));
+  else freeBox.append(h('div', { class: 'slots' }, slots.map(([s, e]) => h('button', {
+    class: 'slot', title: 'Hier ein To-Do anlegen',
+    onclick: () => editTodo({ date: d, start: fromMin(s), end: fromMin(Math.min(s + 60, e)) }),
+  }, fromMin(s) + '–' + fromMin(e), h('small', null, fmtHours(e - s))))));
+  side.append(freeBox);
+
   const noTime = items.filter((i) => !i.start);
   const listBox = h('section', { class: 'card' }, h('h3', null, 'Ohne Uhrzeit'));
   if (!noTime.length) listBox.append(h('p', { class: 'muted' }, 'Keine Einträge ohne Uhrzeit.'));
@@ -409,12 +558,11 @@ function renderDay(main) {
   listBox.append(quickAdd(d));
   side.append(listBox);
 
-  const allBox = h('section', { class: 'card' }, h('h3', null, 'Alle Einträge'));
-  if (!items.length) allBox.append(h('p', { class: 'muted' }, 'Noch nichts geplant. Mit + oder einem Klick in den Zeitplan hinzufügen.'));
+  const allBox = h('section', { class: 'card' }, h('h3', null, 'Zeitplan als Liste'));
+  if (!items.some((i) => i.start)) allBox.append(h('p', { class: 'muted' }, 'Noch nichts mit Uhrzeit geplant.'));
   items.filter((i) => i.start).forEach((i) => allBox.append(itemRow(i)));
   side.append(allBox);
 
-  // Tagesnotiz
   const note = h('textarea', { class: 'daynote', placeholder: 'Notizen / Reflexion für diesen Tag …', rows: 3 });
   note.value = DB.notes[d] || '';
   note.addEventListener('input', () => { if (note.value) DB.notes[d] = note.value; else delete DB.notes[d]; persist(); });
@@ -423,6 +571,18 @@ function renderDay(main) {
   layout.append(side);
   main.append(layout);
   main.append(legend());
+};
+
+function moveToToday(t, silent) {
+  t.date = today();
+  if (t.start) {
+    const c = conflictsAt(DB, t.date, t.start, t.end, t);
+    if (c.length) {
+      const free = findFreeSlot(t.date, durOf(t) || 60, toMin(t.start), t);
+      if (free !== null) { const dur = durOf(t) || 60; t.start = fromMin(free); t.end = fromMin(free + dur); if (!silent) toast('Zeit war belegt – verschoben auf ' + t.start); }
+    }
+  }
+  if (!silent) { persist(); render(); }
 }
 
 function quickAdd(date) {
@@ -436,10 +596,12 @@ function quickAdd(date) {
     const m = text.match(/^(\d{1,2})[:.](\d{2})(?:\s*[-–]\s*(\d{1,2})[:.](\d{2}))?\s+(.*)$/);
     if (m) {
       start = pad(m[1]) + ':' + m[2];
-      end = m[3] ? pad(m[3]) + ':' + m[4] : fromMin(Math.min(toMin(start) + 60, 23 * 60 + 59));
+      end = m[3] ? pad(m[3]) + ':' + m[4] : fromMin(toMin(start) + 60);
       text = m[5];
     }
-    DB.todos.push({ id: uid(), title: text, date, start, end, areaId: state.areaFilter || 'privat', priority: 'normal', done: false, notes: '' });
+    const t = { id: uid(), title: text, date, start, end, areaId: state.areaFilter || 'privat', priority: 'normal', done: false, notes: '', subtasks: [] };
+    if (start) warnConflicts(date, start, end, null);
+    DB.todos.push(t);
     persist();
     render();
   });
@@ -491,7 +653,7 @@ function timeline(date, items) {
     slot.addEventListener('click', (e) => {
       const half = e.offsetY > HOUR / 2 ? 30 : 0;
       const st = hr * 60 + half;
-      editTodo({ date, start: fromMin(st), end: fromMin(Math.min(st + 60, 23 * 60 + 59)) });
+      editTodo({ date, start: fromMin(st), end: fromMin(st + 60) });
     });
     wrap.append(slot);
   }
@@ -499,22 +661,57 @@ function timeline(date, items) {
     const i = ev.item;
     const top = ((ev.s - startH * 60) / 60) * HOUR;
     const height = Math.max(((ev.e - ev.s) / 60) * HOUR - 2, 20);
+    const movable = i.kind === 'todo' || i.kind === 'study' || i.kind === 'work';
+    const sp = movable && i.kind !== 'work' ? subtaskProgress(i.ref) : null;
+    const timeLabel = h('span', null, ' ' + i.start + (i.end ? '–' + i.end : '') + (sp ? ' · ☑ ' + sp : ''));
     const block = h('div', {
-      class: 'event k-' + i.kind + (i.done ? ' done' : '') + (i.skipped ? ' skipped' : ''),
+      class: 'event k-' + i.kind + (i.done ? ' done' : '') + (i.skipped ? ' skipped' : '') + (movable ? ' movable' : ''),
       style: { top: top + 'px', height: height + 'px', left: `calc(52px + (100% - 56px) * ${ev.col / ev.cols})`, width: `calc((100% - 56px) / ${ev.cols} - 3px)` },
       onclick: (e) => { e.stopPropagation(); openItem(i); },
       title: i.title,
     },
-    !i.isWork && !i.skipped ? h('input', { type: 'checkbox', checked: i.done, onclick: (e) => { e.stopPropagation(); toggleItem(i); } }) : null,
-    h('div', { class: 'event-text' },
-      h('strong', null, i.title),
-      h('span', null, ' ' + i.start + (i.end ? '–' + i.end : ''))));
+    !i.readonly && !i.skipped ? h('input', { type: 'checkbox', checked: i.done, onclick: (e) => { e.stopPropagation(); toggleItem(i, date); } }) : null,
+    h('div', { class: 'event-text' }, h('strong', null, i.title), timeLabel));
+    if (movable) {
+      const handle = h('div', { class: 'resize-handle', title: 'Ziehen, um die Dauer zu ändern' });
+      block.append(handle);
+      const snap = (dy) => Math.round(((dy / HOUR) * 60) / 15) * 15;
+      const dur = ev.e - ev.s;
+      let ns = ev.s, ne = ev.e;
+      makeDraggable(block, {
+        onMove: (dx, dy) => {
+          ns = Math.max(0, Math.min(ev.s + snap(dy), 24 * 60 - dur));
+          ne = ns + dur;
+          block.style.top = ((ns - startH * 60) / 60) * HOUR + 'px';
+          timeLabel.textContent = ' ' + fromMin(ns) + '–' + fromMin(ne);
+        },
+        onEnd: () => {
+          if (ns === ev.s) return render();
+          i.ref.start = fromMin(ns); i.ref.end = fromMin(ne);
+          warnConflicts(date, i.ref.start, i.ref.end, i.ref);
+          persist(); render();
+        },
+      });
+      let re = ev.e;
+      makeDraggable(handle, {
+        onStart: () => block.classList.add('dragging'),
+        onMove: (dx, dy) => {
+          re = Math.max(ev.s + 15, Math.min(ev.e + snap(dy), 24 * 60 - 1));
+          block.style.height = Math.max(((re - ev.s) / 60) * HOUR - 2, 20) + 'px';
+          timeLabel.textContent = ' ' + fromMin(ev.s) + '–' + fromMin(re);
+        },
+        onEnd: () => {
+          i.ref.end = fromMin(re);
+          if (!i.ref.start) i.ref.start = fromMin(ev.s);
+          warnConflicts(date, i.ref.start, i.ref.end, i.ref);
+          persist(); render();
+        },
+      });
+    }
     wrap.append(block);
   }
-  // Jetzt-Linie
   if (date === today()) {
-    const now = new Date();
-    const m = now.getHours() * 60 + now.getMinutes();
+    const m = nowMin();
     if (m >= startH * 60 && m <= endH * 60) wrap.append(h('div', { class: 'nowline', style: { top: ((m - startH * 60) / 60) * HOUR + 'px' } }));
   }
   return wrap;
@@ -523,35 +720,65 @@ function timeline(date, items) {
 // ===========================================================================
 // Wochenansicht
 // ===========================================================================
-function renderWeek(main) {
+function isoWeek(s) {
+  const d = parseYmd(s);
+  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
+  const w1 = new Date(d.getFullYear(), 0, 4);
+  return 1 + Math.round(((d - w1) / 86400000 - 3 + ((w1.getDay() + 6) % 7)) / 7);
+}
+
+VIEWS.week = function renderWeek(main) {
   const mon = mondayOf(state.date);
   const sun = addDays(mon, 6);
-  const kw = isoWeek(mon);
-  main.append(dateNav(`KW ${kw} · ${fmtDate(mon, { weekday: false })} – ${fmtDate(sun, { weekday: false, year: true })}`,
+  main.append(dateNav(`KW ${isoWeek(mon)} · ${fmtDate(mon, { weekday: false })} – ${fmtDate(sun, { weekday: false, year: true })}`,
     () => { state.date = addDays(state.date, -7); render(); }, () => { state.date = addDays(state.date, 7); render(); }, () => { state.date = today(); render(); }));
   main.append(areaFilterBar());
   const grid = h('div', { class: 'week' });
   for (let i = 0; i < 7; i++) {
     const d = addDays(mon, i);
     const items = itemsFor(d, state.areaFilter);
-    const col = h('div', { class: 'week-day' + (d === today() ? ' today' : '') },
+    const col = h('div', { class: 'week-day' + (d === today() ? ' today' : ''), dataset: { date: d } },
       h('button', { class: 'week-head', onclick: () => { state.date = d; setView('day'); } }, fmtShort(d)));
     for (const it of items) {
-      col.append(h('div', { class: 'mini k-' + it.kind + (it.done ? ' done' : '') + (it.skipped ? ' skipped' : ''), onclick: () => { state.date = d; openItem(it); } },
-        it.start ? h('span', { class: 'mini-time' }, it.start) : null, it.title));
+      const sp = it.kind === 'todo' || it.kind === 'study' ? subtaskProgress(it.ref) : null;
+      const mini = h('div', { class: 'mini k-' + it.kind + (it.done ? ' done' : '') + (it.skipped ? ' skipped' : ''), onclick: () => { state.date = d; openItem(it); } },
+        it.start ? h('span', { class: 'mini-time' }, it.start) : null, it.title, sp ? h('small', null, ' ☑' + sp) : null);
+      if (it.kind === 'todo' || it.kind === 'study' || it.kind === 'work') {
+        mini.classList.add('movable');
+        makeDraggable(mini, {
+          onMove: (dx, dy, x, y) => {
+            mini.style.transform = `translate(${dx}px, ${dy}px)`;
+            document.querySelectorAll('.week-day.drop').forEach((x) => x.classList.remove('drop'));
+            const target = document.elementFromPoint(x, y);
+            const day = target && target.closest('.week-day');
+            if (day) day.classList.add('drop');
+          },
+          onEnd: (dx, dy, x, y) => {
+            const target = document.elementFromPoint(x, y);
+            const day = target && target.closest('.week-day');
+            if (day && day.dataset.date !== d) {
+              it.ref.date = day.dataset.date;
+              if (it.ref.start) warnConflicts(it.ref.date, it.ref.start, it.ref.end, it.ref);
+              persist();
+              toast('Verschoben auf ' + fmtShort(it.ref.date));
+            }
+            render();
+          },
+        });
+      }
+      col.append(mini);
     }
     col.append(h('button', { class: 'mini-add', onclick: () => editTodo({ date: d }) }, '+ To-Do'));
     grid.append(col);
   }
   main.append(grid);
+  main.append(h('p', { class: 'muted hint' }, 'Tipp: To-Dos, Lerneinheiten und Arbeitszeiten lassen sich auf einen anderen Tag ziehen (am Handy: kurz gedrückt halten).'));
 
-  // Wochenauswertung je Bereich
   const sums = {};
   for (let i = 0; i < 7; i++) {
     for (const it of itemsFor(addDays(mon, i))) {
-      if (!it.start || !it.end) continue;
-      const dur = toMin(it.end) - toMin(it.start);
-      if (dur <= 0) continue;
+      const dur = durOf(it);
+      if (!dur || it.skipped) continue;
       const key = it.kind === 'work' ? 'Arbeit' : (area(it.areaId) || {}).name || 'Ohne Bereich';
       sums[key] = (sums[key] || 0) + dur;
     }
@@ -568,14 +795,7 @@ function renderWeek(main) {
   }
   main.append(stat);
   main.append(legend());
-}
-
-function isoWeek(s) {
-  const d = parseYmd(s);
-  d.setDate(d.getDate() + 3 - ((d.getDay() + 6) % 7));
-  const w1 = new Date(d.getFullYear(), 0, 4);
-  return 1 + Math.round(((d - w1) / 86400000 - 3 + ((w1.getDay() + 6) % 7)) / 7);
-}
+};
 
 // ===========================================================================
 // Routinen
@@ -587,7 +807,20 @@ function weekdayText(wds) {
   return WD_ORDER.filter((x) => wds.includes(x)).map((x) => WD_SHORT[x]).join(', ');
 }
 
-function renderRoutines(main) {
+function routineRate(r, days = 30) {
+  let due = 0, done = 0;
+  for (let i = 1; i <= days; i++) {
+    const d = addDays(today(), -i);
+    if (!routineActive(r, d) || (r.createdAt && d < r.createdAt)) continue;
+    const st = routineState(r.id, d);
+    if (st === 'skip') continue;
+    due++;
+    if (st === 'done') done++;
+  }
+  return { due, done };
+}
+
+VIEWS.routines = function renderRoutines(main) {
   main.append(h('div', { class: 'view-head' }, h('h2', null, 'Routinen'),
     h('button', { class: 'btn primary', onclick: () => editRoutine() }, '+ Neue Routine')));
   main.append(h('p', { class: 'muted' }, 'Routinen erscheinen automatisch an den gewählten Wochentagen (Standard: jeden Tag) in deinem Tagesplan.'));
@@ -599,17 +832,7 @@ function renderRoutines(main) {
   const list = h('section', { class: 'card' });
   const sorted = [...DB.routines].sort((a, b) => (toMin(a.start) ?? 9999) - (toMin(b.start) ?? 9999));
   for (const r of sorted) {
-    const streak = routineStreak(r);
-    // Quote der letzten 30 Tage
-    let due = 0, done = 0;
-    for (let i = 1; i <= 30; i++) {
-      const d = addDays(today(), -i);
-      if (!routineActive(r, d) || (r.createdAt && d < r.createdAt)) continue;
-      const st = routineState(r.id, d);
-      if (st === 'skip') continue;
-      due++;
-      if (st === 'done') done++;
-    }
+    const { due, done } = routineRate(r);
     list.append(h('div', { class: 'item k-routine', onclick: () => editRoutine(r) },
       h('span', { class: 'check-placeholder' }, '↻'),
       h('div', { class: 'item-main' },
@@ -620,10 +843,10 @@ function renderRoutines(main) {
           areaChip(r.areaId),
           r.endDate ? h('span', null, 'bis ' + fmtShort(r.endDate)) : null)),
       h('div', { class: 'streak', title: 'Serie / Quote der letzten 30 Tage' },
-        h('strong', null, '🔥 ' + streak), h('small', null, due ? Math.round((done / due) * 100) + ' %' : '–'))));
+        h('strong', null, '🔥 ' + routineStreak(r)), h('small', null, due ? Math.round((done / due) * 100) + ' %' : '–'))));
   }
   main.append(list);
-}
+};
 
 function addExampleRoutines() {
   const all = [0, 1, 2, 3, 4, 5, 6];
@@ -640,100 +863,26 @@ function addExampleRoutines() {
 }
 
 // ===========================================================================
-// Lernplan
-// ===========================================================================
-function renderStudy(main) {
-  main.append(h('div', { class: 'view-head' }, h('h2', null, 'Lernplan'),
-    h('button', { class: 'btn primary', onclick: () => editExam() }, '+ Prüfung / Fach')));
-  main.append(h('p', { class: 'muted' }, 'Lege Prüfungen oder Abgaben an und lass dir Lerneinheiten automatisch bis zum Termin verteilen. Lerneinheiten erscheinen lila im Tagesplan.'));
-  if (!DB.exams.length) {
-    main.append(h('section', { class: 'card' }, h('p', { class: 'muted' }, 'Noch keine Prüfungen angelegt.')));
-    return;
-  }
-  const sorted = [...DB.exams].sort((a, b) => a.date.localeCompare(b.date));
-  for (const x of sorted) {
-    const sessions = DB.todos.filter((t) => t.examId === x.id).sort((a, b) => (a.date + (a.start || '')).localeCompare(b.date + (b.start || '')));
-    const doneCount = sessions.filter((t) => t.done).length;
-    const left = daysBetween(today(), x.date);
-    const pct = sessions.length ? Math.round((doneCount / sessions.length) * 100) : 0;
-    const card = h('section', { class: 'card exam' + (left < 0 ? ' past' : '') },
-      h('div', { class: 'exam-head' },
-        h('div', null, h('h3', null, x.subject), h('div', { class: 'item-meta' },
-          h('span', null, (x.type || 'Prüfung') + ': ' + fmtDate(x.date, { year: true }) + (x.time ? ', ' + x.time : '')),
-          areaChip(x.areaId))),
-        h('div', { class: 'countdown' + (left <= 7 && left >= 0 ? ' soon' : '') },
-          h('strong', null, left < 0 ? '✓' : String(left)), h('small', null, left < 0 ? 'vorbei' : left === 1 ? 'Tag' : 'Tage'))),
-      h('div', { class: 'progress-wrap' }, h('div', { class: 'progress study' }, h('div', { class: 'progress-bar', style: { width: pct + '%' } })),
-        h('span', { class: 'muted' }, `${doneCount}/${sessions.length} Lerneinheiten`)),
-      x.topics ? h('p', { class: 'topics' }, x.topics) : null,
-      h('div', { class: 'row-actions' },
-        h('button', { class: 'btn small', onclick: () => generateSessions(x) }, '⚙ Lerneinheiten planen'),
-        h('button', { class: 'btn small', onclick: () => editTodo({ date: today(), examId: x.id, areaId: x.areaId, title: 'Lernen: ' + x.subject }) }, '+ Einzelne Einheit'),
-        h('button', { class: 'btn small', onclick: () => editExam(x) }, 'Bearbeiten')));
-    const upcoming = sessions.filter((t) => !t.done && t.date >= today()).slice(0, 5);
-    if (upcoming.length) {
-      card.append(h('h4', null, 'Nächste Einheiten'));
-      upcoming.forEach((t) => card.append(itemRow({ kind: 'study', ref: t, title: t.title, start: t.start, end: t.end, areaId: t.areaId, done: t.done }, { showDate: true })));
-    }
-    main.append(card);
-  }
-}
-
-function generateSessions(x) {
-  const body = h('div', { class: 'form' },
-    field('Anzahl Lerneinheiten', h('input', { name: 'count', type: 'number', min: 1, max: 200, value: 10, required: true })),
-    field('Dauer pro Einheit (Minuten)', h('input', { name: 'dur', type: 'number', min: 15, max: 600, step: 15, value: 90, required: true })),
-    field('Uhrzeit', h('input', { name: 'start', type: 'time', value: '10:00', required: true })),
-    field('Beginnen am', h('input', { name: 'from', type: 'date', value: addDays(today(), 1), required: true })),
-    field('Lerntage', weekdayPicker([1, 2, 3, 4, 5, 6])),
-    h('label', { class: 'check-label' }, h('input', { type: 'checkbox', name: 'replace', checked: true }), ' Bisher geplante, offene Einheiten ersetzen'),
-    h('p', { class: 'muted' }, `Die Einheiten werden gleichmäßig bis zum Tag vor dem Termin (${fmtShort(x.date)}) verteilt. Die letzte Einheit ist eine Wiederholung.`));
-  openModal('Lerneinheiten planen: ' + x.subject, body, (f) => {
-    const wds = readWeekdays(f);
-    const count = Number(f.count.value);
-    const dur = Number(f.dur.value);
-    const days = [];
-    for (let d = f.from.value; d < x.date; d = addDays(d, 1)) if (wds.includes(weekday(d))) days.push(d);
-    if (!days.length) { toast('Zwischen Beginn und Termin liegen keine passenden Tage.'); return false; }
-    if (f.replace.checked) DB.todos = DB.todos.filter((t) => t.examId !== x.id || t.done);
-    const startMin = toMin(f.start.value);
-    for (let i = 0; i < count; i++) {
-      const idx = count === 1 ? days.length - 1 : Math.round((i * (days.length - 1)) / (count - 1));
-      const d = days[idx];
-      // Wenn mehrere Einheiten auf denselben Tag fallen, hintereinander legen
-      const sameDay = DB.todos.filter((t) => t.examId === x.id && t.date === d && !t.done).length;
-      const s = Math.min(startMin + sameDay * (dur + 15), 23 * 60);
-      DB.todos.push({
-        id: uid(), title: (i === count - 1 && count > 1 ? 'Wiederholung: ' : 'Lernen: ') + x.subject + ` (${i + 1}/${count})`,
-        date: d, start: fromMin(s), end: fromMin(Math.min(s + dur, 23 * 60 + 59)), areaId: x.areaId || 'uni',
-        priority: 'normal', done: false, notes: '', examId: x.id,
-      });
-    }
-    persist();
-    toast(count + ' Lerneinheiten geplant');
-  }, null, 'Planen');
-}
-
-// ===========================================================================
 // Arbeitszeit
 // ===========================================================================
-function renderWork(main) {
+function workMinutes(w) { return Math.max(0, toMin(w.end) - toMin(w.start) - (Number(w.pause) || 0)); }
+
+VIEWS.work = function renderWork(main) {
   const mon = mondayOf(state.date);
   const sun = addDays(mon, 6);
   main.append(dateNav(`Arbeitszeit KW ${isoWeek(mon)}`, () => { state.date = addDays(state.date, -7); render(); }, () => { state.date = addDays(state.date, 7); render(); }, () => { state.date = today(); render(); }));
-  const dur = (w) => Math.max(0, toMin(w.end) - toMin(w.start) - (Number(w.pause) || 0));
   const week = DB.work.filter((w) => w.date >= mon && w.date <= sun).sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start));
-  const weekMin = week.reduce((s, w) => s + dur(w), 0);
+  const weekMin = week.reduce((s, w) => s + workMinutes(w), 0);
   const d0 = parseYmd(state.date);
   const mPrefix = d0.getFullYear() + '-' + pad(d0.getMonth() + 1);
-  const monthMin = DB.work.filter((w) => w.date.startsWith(mPrefix)).reduce((s, w) => s + dur(w), 0);
+  const monthMin = DB.work.filter((w) => w.date.startsWith(mPrefix)).reduce((s, w) => s + workMinutes(w), 0);
   const target = Number(DB.settings.weeklyWorkTarget) || 0;
   const wage = Number(DB.settings.hourlyWage) || 0;
 
   main.append(h('div', { class: 'stats' },
-    stat('Diese Woche', fmtHours(weekMin), target ? `Ziel ${target} h` : null),
-    stat('Differenz', target ? (weekMin >= target * 60 ? '+' : '−') + fmtHours(Math.abs(weekMin - target * 60)) : '–', 'zum Wochenziel'),
-    stat(MONTHS[d0.getMonth()], fmtHours(monthMin), wage ? (monthMin / 60 * wage).toFixed(2).replace('.', ',') + ' € brutto' : null)));
+    statTile('Diese Woche', fmtHours(weekMin), target ? `Ziel ${target} h` : null),
+    statTile('Differenz', target ? (weekMin >= target * 60 ? '+' : '−') + fmtHours(Math.abs(weekMin - target * 60)) : '–', 'zum Wochenziel'),
+    statTile(MONTHS[d0.getMonth()], fmtHours(monthMin), wage ? (monthMin / 60 * wage).toFixed(2).replace('.', ',') + ' € brutto' : null)));
   if (target) {
     main.append(h('div', { class: 'progress-wrap' }, h('div', { class: 'progress work' }, h('div', { class: 'progress-bar', style: { width: Math.min(100, (weekMin / (target * 60)) * 100) + '%' } }))));
   }
@@ -743,85 +892,22 @@ function renderWork(main) {
     list.append(h('div', { class: 'item k-work', onclick: () => editWork(w) },
       h('span', { class: 'check-placeholder' }, '⏱'),
       h('div', { class: 'item-main' }, h('div', { class: 'item-title' }, fmtShort(w.date) + ' · ' + w.start + '–' + w.end),
-        h('div', { class: 'item-meta' }, h('span', null, fmtHours(dur(w))), w.pause ? h('span', null, 'Pause ' + w.pause + ' min') : null, w.note ? h('span', null, w.note) : null))));
+        h('div', { class: 'item-meta' }, h('span', null, fmtHours(workMinutes(w))), w.pause ? h('span', null, 'Pause ' + w.pause + ' min') : null, w.note ? h('span', null, w.note) : null))));
   }
   main.append(list);
   main.append(h('button', { class: 'btn', onclick: exportWorkCsv }, '⬇ Arbeitszeiten als CSV (Excel) exportieren'));
-}
+};
 
-function stat(label, value, sub) {
+function statTile(label, value, sub) {
   return h('div', { class: 'stat card' }, h('small', null, label), h('strong', null, value), sub ? h('span', { class: 'muted' }, sub) : null);
 }
 
 function exportWorkCsv() {
   const rows = [['Datum', 'Beginn', 'Ende', 'Pause (min)', 'Stunden', 'Notiz']];
   for (const w of [...DB.work].sort((a, b) => (a.date + a.start).localeCompare(b.date + b.start))) {
-    const min = Math.max(0, toMin(w.end) - toMin(w.start) - (Number(w.pause) || 0));
-    rows.push([w.date, w.start, w.end, w.pause || 0, (min / 60).toFixed(2).replace('.', ','), (w.note || '').replace(/[;\n]/g, ' ')]);
+    rows.push([w.date, w.start, w.end, w.pause || 0, (workMinutes(w) / 60).toFixed(2).replace('.', ','), (w.note || '').replace(/[;\n]/g, ' ')]);
   }
   download('arbeitszeiten.csv', '﻿' + rows.map((r) => r.join(';')).join('\n'), 'text/csv');
-}
-
-// ===========================================================================
-// Einstellungen
-// ===========================================================================
-function renderSettings(main) {
-  const s = DB.settings;
-  main.append(h('h2', null, 'Einstellungen'));
-
-  const colors = h('section', { class: 'card' }, h('h3', null, 'Farben der Kategorien'));
-  for (const k of ['routine', 'todo', 'study', 'work']) {
-    const inp = h('input', { type: 'color', value: s.colors[k] });
-    inp.addEventListener('input', () => { s.colors[k] = inp.value; applyTheme(); persist(); });
-    colors.append(h('label', { class: 'set-row' }, h('span', null, KIND_LABEL[k]), inp));
-  }
-  main.append(colors);
-
-  const areasBox = h('section', { class: 'card' }, h('h3', null, 'Bereiche (z. B. Uni, Arbeit, Privat)'));
-  for (const a of DB.areas) {
-    const name = h('input', { type: 'text', value: a.name });
-    name.addEventListener('change', () => { a.name = name.value.trim() || a.name; persist(); });
-    const col = h('input', { type: 'color', value: a.color });
-    col.addEventListener('input', () => { a.color = col.value; persist(); });
-    const del = h('button', { class: 'btn icon small', title: 'Bereich löschen', onclick: () => {
-      if (DB.areas.length <= 1) return toast('Mindestens ein Bereich wird benötigt.');
-      if (!confirm(`Bereich „${a.name}“ löschen? Einträge behalten ihren Inhalt, verlieren aber die Zuordnung.`)) return;
-      DB.areas = DB.areas.filter((x) => x !== a); persist(); render();
-    } }, '✕');
-    areasBox.append(h('div', { class: 'set-row' }, name, col, del));
-  }
-  areasBox.append(h('button', { class: 'btn small', onclick: () => { DB.areas.push({ id: uid(), name: 'Neuer Bereich', color: '#0ea5e9' }); persist(); render(); } }, '+ Bereich'));
-  main.append(areasBox);
-
-  const gen = h('section', { class: 'card' }, h('h3', null, 'Allgemein'));
-  const numRow = (label, key, min, max, step = 1) => {
-    const inp = h('input', { type: 'number', min, max, step, value: s[key] });
-    inp.addEventListener('change', () => { s[key] = Number(inp.value); persist(); });
-    return h('label', { class: 'set-row' }, h('span', null, label), inp);
-  };
-  gen.append(numRow('Tagesansicht ab (Uhr)', 'dayStart', 0, 23), numRow('Tagesansicht bis (Uhr)', 'dayEnd', 1, 24),
-    numRow('Wochenziel Arbeitsstunden', 'weeklyWorkTarget', 0, 80), numRow('Stundenlohn (€, optional)', 'hourlyWage', 0, 500, 0.01));
-  const theme = h('select', null, ['auto', 'light', 'dark'].map((v) => h('option', { value: v, selected: s.theme === v }, { auto: 'Automatisch', light: 'Hell', dark: 'Dunkel' }[v])));
-  theme.addEventListener('change', () => { s.theme = theme.value; applyTheme(); persist(); });
-  gen.append(h('label', { class: 'set-row' }, h('span', null, 'Design'), theme));
-  main.append(gen);
-
-  const backup = h('section', { class: 'card' }, h('h3', null, 'Datensicherung'),
-    h('p', { class: 'muted' }, 'Lade regelmäßig eine Sicherung herunter. Damit kannst du deine Daten jederzeit wiederherstellen.'),
-    h('div', { class: 'row-actions' },
-      h('button', { class: 'btn', onclick: () => download('planer-backup-' + today() + '.json', JSON.stringify(DB, null, 2), 'application/json') }, '⬇ Backup herunterladen'),
-      h('button', { class: 'btn', onclick: importBackup }, '⬆ Backup einspielen'),
-      h('button', { class: 'btn', onclick: () => {
-        const cutoff = addDays(today(), -60);
-        const before = DB.todos.length;
-        DB.todos = DB.todos.filter((t) => !(t.done && t.date < cutoff));
-        for (const d of Object.keys(DB.routineChecks)) if (d < addDays(today(), -400)) delete DB.routineChecks[d];
-        persist(); toast((before - DB.todos.length) + ' alte, erledigte To-Dos entfernt');
-      } }, 'Aufräumen (erledigte To-Dos älter als 60 Tage)')));
-  main.append(backup);
-
-  main.append(h('section', { class: 'card' }, h('h3', null, 'Konto'),
-    h('button', { class: 'btn danger', onclick: async () => { await saveNow(); await fetch('/api/logout'); location.href = '/login'; } }, 'Abmelden')));
 }
 
 function download(name, content, type) {
@@ -829,24 +915,6 @@ function download(name, content, type) {
   document.body.append(a);
   a.click();
   setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-}
-
-function importBackup() {
-  const inp = h('input', { type: 'file', accept: 'application/json,.json' });
-  inp.addEventListener('change', async () => {
-    try {
-      const data = JSON.parse(await inp.files[0].text());
-      if (!data || !Array.isArray(data.todos)) throw new Error('Format');
-      if (!confirm('Alle aktuellen Daten durch das Backup ersetzen?')) return;
-      DB = normalize(data);
-      persist();
-      render();
-      toast('Backup eingespielt');
-    } catch (_) {
-      toast('Die Datei ist kein gültiges Backup.');
-    }
-  });
-  inp.click();
 }
 
 // ===========================================================================
@@ -860,11 +928,12 @@ function openModal(title, body, onSave, onDelete, okLabel = 'Speichern') {
   $('#modal-body').replaceChildren(body);
   $('#modal-ok').textContent = okLabel;
   $('#modal-delete').hidden = !onDelete;
+  $('#modal-cancel').hidden = !onSave;
   modalHandler = onSave;
   deleteHandler = onDelete;
   $('#modal').showModal();
-  const first = body.querySelector('input[type=text], input:not([type])');
-  if (first) setTimeout(() => first.focus(), 30);
+  const first = body.querySelector('input[type=text]:not([data-nofocus])');
+  if (first && !first.value && window.matchMedia('(pointer: fine)').matches) setTimeout(() => first.focus(), 30);
 }
 
 $('#modal-form').addEventListener('submit', (e) => {
@@ -880,8 +949,8 @@ $('#modal-delete').addEventListener('click', () => {
 
 function field(label, input) { return h('label', { class: 'field' }, h('span', null, label), input); }
 
-function areaSelect(selected) {
-  return h('select', { name: 'area' }, DB.areas.map((a) => h('option', { value: a.id, selected: a.id === selected }, a.name)));
+function areaSelect(selected, name = 'area') {
+  return h('select', { name }, DB.areas.map((a) => h('option', { value: a.id, selected: a.id === selected }, a.name)));
 }
 
 function weekdayPicker(selected) {
@@ -890,10 +959,10 @@ function weekdayPicker(selected) {
 }
 function readWeekdays(f) { return WD_ORDER.filter((d) => f['wd' + d].checked); }
 
-function timeFields(start, end) {
-  const s = h('input', { name: 'start', type: 'time', value: start || '' });
-  const e = h('input', { name: 'end', type: 'time', value: end || '' });
-  s.addEventListener('change', () => { if (s.value && (!e.value || toMin(e.value) <= toMin(s.value))) e.value = fromMin(Math.min(toMin(s.value) + 60, 23 * 60 + 59)); });
+function timeFields(start, end, names = ['start', 'end']) {
+  const s = h('input', { name: names[0], type: 'time', value: start || '' });
+  const e = h('input', { name: names[1], type: 'time', value: end || '' });
+  s.addEventListener('change', () => { if (s.value && (!e.value || toMin(e.value) <= toMin(s.value))) e.value = fromMin(toMin(s.value) + 60); e.dispatchEvent(new Event('input', { bubbles: true })); });
   return h('div', { class: 'two' }, field('Von', s), field('Bis', e));
 }
 
@@ -903,27 +972,85 @@ function checkTimes(f) {
   return true;
 }
 
+/** Hinweisbox bei Überschneidungen mit Vorschlag der nächsten freien Zeit. */
+function conflictBox(body, ref) {
+  const box = h('div', { class: 'conflict', hidden: true });
+  const update = () => {
+    const f = body.closest('form') ? body.closest('form').elements : null;
+    if (!f || !f.date || !f.start) return;
+    const date = f.date.value, start = f.start.value, end = f.end.value;
+    box.replaceChildren();
+    if (!date || !start) { box.hidden = true; return; }
+    const c = conflictsAt(DB, date, start, end, ref);
+    if (!c.length) { box.hidden = true; return; }
+    const dur = (toMin(end) || toMin(start) + 60) - toMin(start);
+    const free = findFreeSlot(date, dur, toMin(start), ref);
+    box.append(h('strong', null, '⚠ Zu dieser Zeit ist schon etwas geplant: '), conflictText(c), '.');
+    if (free !== null) {
+      box.append(h('div', null, 'Nächste freie Zeit: ' + fromMin(free) + '–' + fromMin(free + dur) + ' ',
+        h('button', { type: 'button', class: 'btn small', onclick: () => { f.start.value = fromMin(free); f.end.value = fromMin(free + dur); update(); } }, 'Übernehmen')));
+    } else box.append(h('div', null, 'An diesem Tag gibt es kein passendes freies Zeitfenster mehr.'));
+    box.append(h('div', { class: 'muted' }, 'Du kannst trotzdem speichern.'));
+    box.hidden = false;
+  };
+  body.addEventListener('input', update);
+  body.addEventListener('change', update);
+  setTimeout(update, 0);
+  return box;
+}
+
+const REMINDER_OPTS = [['', 'Standard'], ['off', 'Keine'], ['0', 'Zum Beginn'], ['5', '5 min vorher'], ['10', '10 min vorher'], ['15', '15 min vorher'], ['30', '30 min vorher'], ['60', '1 h vorher'], ['120', '2 h vorher'], ['1440', '1 Tag vorher']];
+
+function subtaskEditor(list) {
+  const wrap = h('div', { class: 'subedit' });
+  const draw = () => {
+    wrap.replaceChildren();
+    list.forEach((s, idx) => {
+      const txt = h('input', { type: 'text', value: s.title, 'data-nofocus': '1' });
+      txt.addEventListener('input', () => (s.title = txt.value));
+      wrap.append(h('div', { class: 'subedit-row' },
+        h('input', { type: 'checkbox', checked: s.done, onchange: (e) => (s.done = e.target.checked) }), txt,
+        h('button', { type: 'button', class: 'btn icon small', title: 'Hoch', disabled: idx === 0, onclick: () => { list.splice(idx - 1, 0, list.splice(idx, 1)[0]); draw(); } }, '↑'),
+        h('button', { type: 'button', class: 'btn icon small', title: 'Entfernen', onclick: () => { list.splice(idx, 1); draw(); } }, '✕')));
+    });
+    const add = h('input', { type: 'text', placeholder: '+ Unteraufgabe hinzufügen (Enter)', 'data-nofocus': '1' });
+    add.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); if (add.value.trim()) { list.push({ id: uid(), title: add.value.trim(), done: false }); draw(); wrap.querySelector('input[placeholder]').focus(); } }
+    });
+    wrap.append(add);
+  };
+  draw();
+  return wrap;
+}
+
 function editTodo(t = {}) {
   const isNew = !t.id;
-  const body = h('div', { class: 'form' },
+  const subtasks = (t.subtasks || []).map((s) => ({ ...s }));
+  const body = h('div', { class: 'form' });
+  body.append(
     field('Titel', h('input', { name: 'title', type: 'text', value: t.title || '', required: true, placeholder: 'z. B. Übungsblatt 3 abgeben' })),
     field('Datum', h('input', { name: 'date', type: 'date', value: t.date || today(), required: true })),
     timeFields(t.start, t.end),
+    conflictBox(body, isNew ? null : t),
     h('div', { class: 'two' }, field('Bereich', areaSelect(t.areaId || state.areaFilter || 'privat')),
       field('Priorität', h('select', { name: 'prio' }, ['hoch', 'normal', 'niedrig'].map((p) => h('option', { value: p, selected: (t.priority || 'normal') === p }, p[0].toUpperCase() + p.slice(1)))))),
-    field('Gehört zu Prüfung (Lernplan)', h('select', { name: 'exam' }, h('option', { value: '' }, '– keine –'),
-      DB.exams.map((x) => h('option', { value: x.id, selected: t.examId === x.id }, x.subject)))),
+    h('div', { class: 'two' },
+      field('Gehört zu Prüfung (Lernplan)', h('select', { name: 'exam' }, h('option', { value: '' }, '– keine –'),
+        DB.exams.map((x) => h('option', { value: x.id, selected: t.examId === x.id }, x.subject)))),
+      field('Erinnerung (Push)', h('select', { name: 'reminder' }, REMINDER_OPTS.map(([v, l]) => h('option', { value: v, selected: String(t.reminder ?? '') === v }, l))))),
+    field('Unteraufgaben', subtaskEditor(subtasks)),
     field('Notizen', h('textarea', { name: 'notes', rows: 3 }, t.notes || '')),
     isNew ? h('div', { class: 'two' },
       field('Wiederholen', h('select', { name: 'repeat' }, h('option', { value: '' }, 'Nein'), h('option', { value: '1' }, 'Täglich'), h('option', { value: '7' }, 'Wöchentlich'), h('option', { value: '14' }, 'Alle 2 Wochen'))),
       field('Anzahl Termine', h('input', { name: 'times', type: 'number', min: 1, max: 52, value: 1 }))) : null);
   openModal(isNew ? 'Neues To-Do' : 'To-Do bearbeiten', body, (f) => {
     if (!checkTimes(f)) return false;
-    const vals = { title: f.title.value.trim(), date: f.date.value, start: f.start.value, end: f.end.value, areaId: f.area.value, priority: f.prio.value, examId: f.exam.value || undefined, notes: f.notes.value };
+    const subs = subtasks.filter((s) => s.title.trim());
+    const vals = { title: f.title.value.trim(), date: f.date.value, start: f.start.value, end: f.end.value, areaId: f.area.value, priority: f.prio.value, examId: f.exam.value || undefined, notes: f.notes.value, reminder: f.reminder.value, subtasks: subs };
     if (isNew) {
       const step = Number(f.repeat.value) || 0;
       const times = step ? Math.max(1, Number(f.times.value) || 1) : 1;
-      for (let i = 0; i < times; i++) DB.todos.push({ id: uid(), done: false, ...vals, date: addDays(vals.date, i * step) });
+      for (let i = 0; i < times; i++) DB.todos.push({ id: uid(), done: false, ...vals, subtasks: subs.map((s) => ({ ...s, id: uid() })), date: addDays(vals.date, i * step) });
     } else Object.assign(t, vals);
     persist();
   }, isNew ? null : () => { DB.todos = DB.todos.filter((x) => x !== t); });
@@ -935,7 +1062,8 @@ function editRoutine(r = {}) {
     field('Titel', h('input', { name: 'title', type: 'text', value: r.title || '', required: true, placeholder: 'z. B. Morgenroutine, Sport, Vokabeln' })),
     timeFields(r.start, r.end),
     field('Wochentage', weekdayPicker(r.weekdays || [0, 1, 2, 3, 4, 5, 6])),
-    field('Bereich', areaSelect(r.areaId || 'privat')),
+    h('div', { class: 'two' }, field('Bereich', areaSelect(r.areaId || 'privat')),
+      field('Erinnerung (Push)', h('select', { name: 'reminder' }, REMINDER_OPTS.map(([v, l]) => h('option', { value: v, selected: String(r.reminder ?? '') === v }, l))))),
     h('div', { class: 'two' }, field('Gültig ab (optional)', h('input', { name: 'from', type: 'date', value: r.startDate || '' })),
       field('Gültig bis (optional)', h('input', { name: 'to', type: 'date', value: r.endDate || '' }))),
     field('Notizen', h('textarea', { name: 'notes', rows: 2 }, r.notes || '')));
@@ -943,47 +1071,23 @@ function editRoutine(r = {}) {
     if (!checkTimes(f)) return false;
     const wds = readWeekdays(f);
     if (!wds.length) { toast('Bitte mindestens einen Wochentag wählen.'); return false; }
-    const vals = { title: f.title.value.trim(), start: f.start.value, end: f.end.value, weekdays: wds, areaId: f.area.value, startDate: f.from.value || undefined, endDate: f.to.value || undefined, notes: f.notes.value };
+    const vals = { title: f.title.value.trim(), start: f.start.value, end: f.end.value, weekdays: wds, areaId: f.area.value, reminder: f.reminder.value, startDate: f.from.value || undefined, endDate: f.to.value || undefined, notes: f.notes.value };
     if (isNew) DB.routines.push({ id: uid(), createdAt: today(), ...vals });
     else Object.assign(r, vals);
     persist();
   }, isNew ? null : () => { DB.routines = DB.routines.filter((x) => x !== r); });
 }
 
-function editExam(x = {}) {
-  const isNew = !x.id;
-  const body = h('div', { class: 'form' },
-    field('Fach / Modul', h('input', { name: 'subject', type: 'text', value: x.subject || '', required: true, placeholder: 'z. B. Statistik II' })),
-    h('div', { class: 'two' },
-      field('Art', h('select', { name: 'type' }, ['Prüfung', 'Klausur', 'Abgabe', 'Präsentation', 'Hausarbeit'].map((v) => h('option', { selected: (x.type || 'Prüfung') === v }, v)))),
-      field('Bereich', areaSelect(x.areaId || 'uni'))),
-    h('div', { class: 'two' }, field('Datum', h('input', { name: 'date', type: 'date', value: x.date || addDays(today(), 21), required: true })),
-      field('Uhrzeit (optional)', h('input', { name: 'time', type: 'time', value: x.time || '' }))),
-    field('Themen / Stoff', h('textarea', { name: 'topics', rows: 3, placeholder: 'Kapitel 1–5, Altklausuren …' }, x.topics || '')),
-    h('label', { class: 'check-label' }, h('input', { type: 'checkbox', name: 'addtodo', checked: isNew }), ' Termin als To-Do in den Kalender eintragen'));
-  openModal(isNew ? 'Neue Prüfung / Abgabe' : 'Prüfung bearbeiten', body, (f) => {
-    const vals = { subject: f.subject.value.trim(), type: f.type.value, areaId: f.area.value, date: f.date.value, time: f.time.value, topics: f.topics.value };
-    if (isNew) { x = { id: uid(), ...vals }; DB.exams.push(x); } else Object.assign(x, vals);
-    if (f.addtodo.checked && !DB.todos.some((t) => t.examEventOf === x.id)) {
-      DB.todos.push({ id: uid(), title: vals.type + ': ' + vals.subject, date: vals.date, start: vals.time, end: vals.time ? fromMin(Math.min(toMin(vals.time) + 120, 23 * 60 + 59)) : '', areaId: vals.areaId, priority: 'hoch', done: false, notes: '', examEventOf: x.id });
-    }
-    persist();
-  }, isNew ? null : () => {
-    const delSessions = confirm('Sollen die zugehörigen Lerneinheiten auch gelöscht werden? (OK = ja, Abbrechen = behalten)');
-    DB.exams = DB.exams.filter((y) => y !== x);
-    DB.todos = DB.todos.filter((t) => t.examEventOf !== x.id && !(delSessions && t.examId === x.id));
-    DB.todos.forEach((t) => { if (t.examId === x.id) delete t.examId; });
-  });
-}
-
 function editWork(w = {}) {
   const isNew = !w.id;
-  const body = h('div', { class: 'form' },
+  const body = h('div', { class: 'form' });
+  body.append(
     field('Datum', h('input', { name: 'date', type: 'date', value: w.date || today(), required: true })),
     h('div', { class: 'two' }, field('Beginn', h('input', { name: 'start', type: 'time', value: w.start || '09:00', required: true })),
       field('Ende', h('input', { name: 'end', type: 'time', value: w.end || '13:00', required: true }))),
+    conflictBox(body, isNew ? null : w),
     h('div', { class: 'two' }, field('Pause (Minuten)', h('input', { name: 'pause', type: 'number', min: 0, max: 600, value: w.pause || 0 })),
-      field('Notiz / Arbeitgeber', h('input', { name: 'note', type: 'text', value: w.note || '' }))),
+      field('Notiz / Arbeitgeber', h('input', { name: 'note', type: 'text', value: w.note || '', 'data-nofocus': '1' }))),
     isNew ? field('Wöchentlich wiederholen (Anzahl Wochen)', h('input', { name: 'weeks', type: 'number', min: 1, max: 52, value: 1 })) : null);
   openModal(isNew ? 'Arbeitszeit eintragen' : 'Arbeitszeit bearbeiten', body, (f) => {
     if (!checkTimes(f)) return false;
@@ -995,27 +1099,3 @@ function editWork(w = {}) {
     persist();
   }, isNew ? null : () => { DB.work = DB.work.filter((x) => x !== w); });
 }
-
-// ===========================================================================
-// Start
-// ===========================================================================
-// Tastenkürzel: n = neues To-Do, ←/→ = Tag/Woche wechseln, t = heute
-document.addEventListener('keydown', (e) => {
-  if ($('#modal').open || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
-  const step = state.view === 'week' || state.view === 'work' ? 7 : 1;
-  if (e.key === 'n') { e.preventDefault(); $('#fab').click(); }
-  else if (e.key === 'ArrowLeft') { state.date = addDays(state.date, -step); render(); }
-  else if (e.key === 'ArrowRight') { state.date = addDays(state.date, step); render(); }
-  else if (e.key === 't') { state.date = today(); render(); }
-});
-
-// Jetzt-Linie jede Minute aktualisieren (nur wenn kein Eingabefeld aktiv ist)
-setInterval(() => {
-  if (state.view === 'day' && !$('#modal').open && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) render();
-}, 60000);
-
-load().then(render).catch(() => {
-  setSync('error', 'Server nicht erreichbar');
-  toast('Server nicht erreichbar');
-  render();
-});

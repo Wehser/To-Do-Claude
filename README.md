@@ -6,14 +6,28 @@ Ein passwortgeschützter Tagesplaner im Browser, den du auf Handy, Tablet und La
 
 | Bereich | Was es kann |
 |---|---|
-| **Tag** | Zeitplan mit Time-Slots (Klick in eine Stunde legt ein To-Do an), Liste „Ohne Uhrzeit“, Fortschrittsbalken, rote Jetzt-Linie, Tagesnotiz, Schnelleingabe („14:00-15:30 Mathe“) |
-| **Routinen** (blau) | Wiederkehrende Aufgaben: täglich oder an bestimmten Wochentagen, optional mit Start-/Enddatum. Abhaken pro Tag, „heute überspringen“, Serie 🔥 und Erfüllungsquote der letzten 30 Tage |
-| **To-Dos** (orange) | Aufgaben für einen bestimmten Tag, mit Uhrzeit, Priorität, Bereich, Notizen, optionaler Wiederholung. Unerledigte To-Dos aus der Vergangenheit erscheinen als „Überfällig“ und lassen sich auf heute verschieben |
-| **Lernplan** (lila) | Prüfungen, Klausuren und Abgaben mit Countdown. Lerneinheiten werden automatisch bis zum Termin verteilt (Anzahl, Dauer, Uhrzeit, Lerntage einstellbar), mit Fortschritt |
-| **Arbeitszeit** (grün) | Schichten mit Pause, Wochenziel, Monatssumme, optional Stundenlohn, CSV-Export für Excel |
-| **Woche** | 7-Tage-Übersicht und Auswertung der geplanten Stunden je Bereich |
-| **Bereiche** | Frei definierbar (vorgegeben: Privat, Uni, Arbeit, Sport & Gesundheit), jeweils mit eigener Farbe; jede Ansicht lässt sich danach filtern |
-| **Sonstiges** | Hell/Dunkel-Modus, Farben anpassbar, Backup als Datei herunterladen und wieder einspielen, als App auf dem Homescreen installierbar, Tastenkürzel (`n` neu, `←`/`→` blättern, `t` heute) |
+| **Tag** | Zeitplan mit Time-Slots, freie Zeitfenster, Liste „Ohne Uhrzeit“, Fortschrittsbalken, Jetzt-Linie, Tagesnotiz, Schnelleingabe („14:00-15:30 Mathe“). To-Dos per Ziehen verschieben und in der Länge ändern (am Handy: kurz gedrückt halten) |
+| **Routinen** (blau) | Täglich oder an bestimmten Wochentagen, optional mit Start-/Enddatum. Abhaken, „heute überspringen“, Serie 🔥 und Quote der letzten 30 Tage |
+| **To-Dos** (orange) | Für einen bestimmten Tag, mit Uhrzeit, Priorität, Bereich, **Unteraufgaben**, eigener Erinnerung, Wiederholung. Überfällige To-Dos lassen sich auf heute verschieben |
+| **Überschneidungen** | Beim Anlegen oder Verschieben in eine belegte Zeit erscheint ein Hinweis mit Vorschlag für die nächste freie Zeit |
+| **Lernplan** (lila) | Prüfungen und Abgaben mit Countdown. Lerneinheiten werden automatisch in freie Zeitfenster bis zum Termin verteilt |
+| **Pomodoro-Timer** | Start per ▶ an jeder Aufgabe oder Prüfung. Fokus- und Pausenzeiten einstellbar, Ton, Push-Nachricht zum Ende. Lernzeit wird protokolliert und lässt sich nachträglich bearbeiten oder nachtragen (mit Konzentrations-Bewertung) |
+| **Dashboard** | Wochen-, Monats- oder freier Zeitraum: Lernzeit geplant vs. tatsächlich, nach Fach und Uhrzeit, Erledigungsquote, Routinen, Arbeitszeit, Notenschnitt, Rückblick in Worten, Vergleich mit dem Vorzeitraum, CSV-Export |
+| **Noten & ECTS** | Module mit ECTS und Note je Semester, ECTS-gewichteter Schnitt, Fortschritt zum Studienziel, Zielrechner („Welchen Schnitt brauche ich noch?“) |
+| **Arbeitszeit** (grün) | Schichten mit Pause, Wochenziel, Monatssumme, Stundenlohn, CSV-Export |
+| **Kalender** (türkis) | Stundenplan oder Google-Kalender als .ics-Datei oder Abo-Link importieren (inkl. Serienterminen). Eigene Einträge als Abo in Google, Apple oder Outlook Kalender anzeigen |
+| **Push-Benachrichtigungen** | Pro Gerät an/aus und je Nachrichtenart wählbar. Vorlaufzeit je Kategorie, Morgen-Übersicht, Abend-Erinnerung, Prüfungs-Countdown, Ruhezeiten, eigene Erinnerung pro Eintrag |
+| **Sonstiges** | Bereiche mit Farben und Filter, Hell/Dunkel, Backup, als App installierbar, Tastenkürzel (`n`, `←`/`→`, `t`) |
+
+### Hinweise zu Push-Nachrichten
+
+- Erinnerungen verschickt der Server. Er muss dafür **dauerhaft laufen**. Der kostenlose Render-Plan schläft nach 15 Minuten ein; dann kommen Erinnerungen nur, solange jemand die Seite nutzt. Abhilfe: bezahlter Plan (ca. 7 $/Monat) oder ein eigener Server.
+- **iPhone/iPad:** Push geht nur, wenn die Seite über Safari → Teilen → „Zum Home-Bildschirm“ installiert und von dort geöffnet wird (ab iOS 16.4).
+- Die Schlüssel für Push werden beim ersten Start erzeugt und in der Datenbank gespeichert.
+
+### Geplant / Ideen
+
+- Gewohnheiten zählen (Wasser, Schritte …) und Routinen mit Unterpunkten
 
 ## Lokal starten
 
@@ -69,3 +83,5 @@ Hinweis: Der kostenlose Render-Plan schläft nach 15 Minuten ohne Nutzung ein. D
 | `DATA_DIR` | nein | Ordner für die Datei-Speicherung (Standard `./data`) |
 | `PORT` | nein | Port des Servers (Standard 3000) |
 | `SESSION_DAYS` | nein | Wie lange ein Login gültig bleibt (Standard 30) |
+| `VAPID_SUBJECT` | nein | Kontakt für Push-Dienste, z. B. `mailto:du@example.com` (Standard: Adresse der Seite) |
+| `ALWAYS_ON` | nein | Auf `1` setzen, wenn der Server dauerhaft läuft (blendet den Hinweis in den Einstellungen aus) |

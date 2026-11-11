@@ -13,5 +13,8 @@
   "optionalDependencies": {
     "pg": "^8.11.3"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "web-push": "^3.6.7"
+  }
 }

@@ -16,10 +16,12 @@
     <nav class="tabs" id="tabs">
       <button data-view="day" class="active">Tag</button>
       <button data-view="week">Woche</button>
-      <button data-view="routines">Routinen</button>
       <button data-view="study">Lernplan</button>
-      <button data-view="work">Arbeitszeit</button>
-      <button data-view="settings">Einstellungen</button>
+      <button data-view="dashboard">Dashboard</button>
+      <button data-view="grades">Noten</button>
+      <button data-view="work">Arbeit</button>
+      <button data-view="routines">Routinen</button>
+      <button data-view="settings" title="Einstellungen">⚙︎</button>
     </nav>
     <span id="sync" class="sync" title="Speicherstatus">●</span>
   </header>
@@ -42,6 +44,13 @@
   </dialog>
 
   <div id="toast" class="toast" hidden></div>
+  <script src="/shared.js"></script>
   <script src="/app.js"></script>
+  <script src="/ics.js"></script>
+  <script src="/study.js"></script>
+  <script src="/grades.js"></script>
+  <script src="/dashboard.js"></script>
+  <script src="/settings.js"></script>
+  <script src="/main.js"></script>
 </body>
 </html>
