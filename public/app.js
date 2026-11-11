@@ -404,7 +404,7 @@ function itemRow(item, opts = {}) {
   const row = h('div', { class: 'item k-' + item.kind + (item.done ? ' done' : '') + (item.skipped ? ' skipped' : '') });
   if (!item.readonly) {
     row.append(h('input', { type: 'checkbox', class: 'check', checked: item.done, disabled: item.skipped, onclick: (e) => { e.stopPropagation(); toggleItem(item, date); }, title: 'Erledigt' }));
-  } else row.append(h('span', { class: 'check-placeholder' }, item.kind === 'event' ? '📅' : '⏱'));
+  } else row.append(h('span', { class: 'check-placeholder' }, item.holiday ? '🎉' : item.kind === 'event' ? '📅' : '⏱'));
   const time = item.start ? item.start + (item.end ? '–' + item.end : '') : '';
   const ex = t.examId ? exam(t.examId) : null;
   const sp = (item.kind === 'todo' || item.kind === 'study') ? subtaskProgress(t) : null;
@@ -416,7 +416,7 @@ function itemRow(item, opts = {}) {
     h('div', { class: 'item-meta' },
       time ? h('span', null, time) : null,
       opts.showDate && t.date ? h('span', null, fmtShort(t.date)) : null,
-      h('span', { class: 'kind-label' }, KIND_LABEL[item.kind]),
+      h('span', { class: 'kind-label' }, item.holiday ? 'Feiertag' : KIND_LABEL[item.kind]),
       ex ? h('span', null, '📚 ' + ex.subject) : null,
       sp ? h('button', { class: 'sub-toggle', title: 'Unteraufgaben anzeigen', onclick: (e) => { e.stopPropagation(); expanded ? state.expanded.delete(t.id) : state.expanded.add(t.id); render(); } }, (expanded ? '▾ ' : '▸ ') + '☑ ' + sp) : null,
       item.location ? h('span', null, '📍 ' + item.location) : null,
@@ -515,6 +515,8 @@ VIEWS.day = function renderDay(main) {
   main.append(dateNav(label, () => { state.date = addDays(d, -1); render(); }, () => { state.date = addDays(d, 1); render(); }, () => { state.date = today(); render(); }));
   main.append(areaFilterBar());
 
+  const holidays = itemsFor(d).filter((i) => i.holiday);
+  if (holidays.length) main.append(h('div', { class: 'holiday-banner' }, '🎉 Feiertag: ' + holidays.map((i) => i.title).join(', ')));
   const checkable = items.filter((i) => !i.readonly && !i.skipped);
   const done = checkable.filter((i) => i.done).length;
   const pct = checkable.length ? Math.round((done / checkable.length) * 100) : 0;
@@ -737,8 +739,10 @@ VIEWS.week = function renderWeek(main) {
   for (let i = 0; i < 7; i++) {
     const d = addDays(mon, i);
     const items = itemsFor(d, state.areaFilter);
-    const col = h('div', { class: 'week-day' + (d === today() ? ' today' : ''), dataset: { date: d } },
-      h('button', { class: 'week-head', onclick: () => { state.date = d; setView('day'); } }, fmtShort(d)));
+    const hol = itemsFor(d).filter((i) => i.holiday);
+    const col = h('div', { class: 'week-day' + (d === today() ? ' today' : '') + (hol.length ? ' holiday' : ''), dataset: { date: d } },
+      h('button', { class: 'week-head', onclick: () => { state.date = d; setView('day'); } }, fmtShort(d),
+        hol.length ? h('small', { class: 'holiday-name' }, '🎉 ' + hol.map((i) => i.title).join(', ')) : null));
     for (const it of items) {
       const sp = it.kind === 'todo' || it.kind === 'study' ? subtaskProgress(it.ref) : null;
       const mini = h('div', { class: 'mini k-' + it.kind + (it.done ? ' done' : '') + (it.skipped ? ' skipped' : ''), onclick: () => { state.date = d; openItem(it); } },

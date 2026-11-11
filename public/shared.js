@@ -43,7 +43,7 @@
       if (c.hidden) continue;
       for (const e of c.events || []) {
         if (e.date !== date) continue;
-        items.push({ kind: 'event', ref: e, cal: c, id: c.id + ':' + e.id, title: e.title, start: e.start, end: e.end, areaId: c.areaId, done: false, readonly: true, location: e.location });
+        items.push({ kind: 'event', ref: e, cal: c, id: c.id + ':' + e.id, title: e.title, start: e.start, end: e.end, areaId: c.areaId, done: false, readonly: true, location: e.location, holiday: !!c.holiday });
       }
     }
     return items.sort((a, b) => (toMin(a.start) ?? 9999) - (toMin(b.start) ?? 9999) || a.title.localeCompare(b.title));

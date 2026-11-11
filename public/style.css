@@ -362,6 +362,12 @@ details ul { font-size: .88rem; padding-left: 20px; }
   .time-range input { width: 96px; }
 }
 
+/* Feiertage */
+.holiday-banner { background: color-mix(in srgb, var(--danger) 12%, var(--surface)); border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); color: var(--text); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-weight: 600; }
+.week-day.holiday { background: color-mix(in srgb, var(--danger) 7%, var(--surface)); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.week-day.holiday .week-head { color: var(--danger); }
+.holiday-name { display: block; font-weight: 500; font-size: .75rem; color: var(--danger); }
+
 /* Farben je Kategorie (am Ende, damit sie die Standardfarbe überschreiben) */
 .k-routine { --k: var(--c-routine); }
 .k-todo { --k: var(--c-todo); }
