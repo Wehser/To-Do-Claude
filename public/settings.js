@@ -323,6 +323,7 @@ function importBackup() {
 // ===========================================================================
 // Daten hinzufügen (Zusammenführen statt Ersetzen)
 // ===========================================================================
+const MERGE_SETTINGS = { weeklyWorkTarget: 'Wochenziel Arbeitsstunden', hourlyWage: 'Stundenlohn', dayStart: 'Tagesansicht ab', dayEnd: 'Tagesansicht bis', ectsTarget: 'ECTS gesamt', gradeTarget: 'Wunsch-Endnote' };
 const MERGE_LISTS = { routines: 'Routinen', todos: 'To-Dos', exams: 'Prüfungen', work: 'Arbeitszeiten', grades: 'Noten', focus: 'Lernzeiten', calendars: 'Kalender' };
 
 /** Ordnet Bereichsangaben (ID oder Name) vorhandenen Bereichen zu und legt fehlende an. */
@@ -367,6 +368,24 @@ function mergeData(data) {
   if (data.routineChecks && typeof data.routineChecks === 'object') {
     for (const [d, v] of Object.entries(data.routineChecks)) DB.routineChecks[d] = { ...(DB.routineChecks[d] || {}), ...v };
   }
+  // Einträge entfernen: { remove: { work: ['id', …], todos: [...] } }
+  report.removed = {};
+  if (data.remove && typeof data.remove === 'object') {
+    for (const [key, label] of Object.entries(MERGE_LISTS)) {
+      const ids = new Set(Array.isArray(data.remove[key]) ? data.remove[key] : []);
+      if (!ids.size) continue;
+      const before = DB[key].length;
+      DB[key] = DB[key].filter((x) => !ids.has(x.id));
+      if (before - DB[key].length) report.removed[label] = before - DB[key].length;
+    }
+  }
+  // Ausgewählte Einstellungen übernehmen
+  report.settings = [];
+  if (data.settings && typeof data.settings === 'object') {
+    for (const [k, label] of Object.entries(MERGE_SETTINGS)) {
+      if (data.settings[k] !== undefined) { DB.settings[k] = data.settings[k]; report.settings.push(label + ': ' + data.settings[k]); }
+    }
+  }
   if (data.notes && typeof data.notes === 'object') for (const [d, v] of Object.entries(data.notes)) DB.notes[d] = DB.notes[d] ? DB.notes[d] + '\n' + v : v;
   return report;
 }
@@ -380,9 +399,12 @@ function importMerge() {
       if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Format');
     } catch (_) { toast('Die Datei konnte nicht gelesen werden (kein gültiges JSON).', 5000); return; }
     const counts = Object.entries(MERGE_LISTS).filter(([k]) => Array.isArray(data[k]) && data[k].length).map(([k, l]) => data[k].length + ' ' + l);
+    const removes = Object.entries(MERGE_LISTS).filter(([k]) => data.remove && Array.isArray(data.remove[k]) && data.remove[k].length).map(([k, l]) => data.remove[k].length + ' ' + l + ' werden entfernt');
+    const sets = Object.entries(MERGE_SETTINGS).filter(([k]) => data.settings && data.settings[k] !== undefined).map(([k, l]) => 'Einstellung „' + l + '“ = ' + data.settings[k]);
+    counts.push(...removes, ...sets);
     if (!counts.length) { toast('In der Datei wurden keine Einträge gefunden.', 5000); return; }
     const body = h('div', { class: 'form' },
-      h('p', null, 'Folgendes wird zu deinen Daten hinzugefügt:'),
+      h('p', null, 'Folgende Änderungen werden übernommen:'),
       h('ul', null, counts.map((c) => h('li', null, c))),
       h('p', { class: 'muted' }, 'Vorhandene Einträge bleiben erhalten. Einträge mit gleicher ID werden aktualisiert. Vorher wird automatisch ein Backup heruntergeladen.'));
     openModal('Daten hinzufügen', body, () => {
@@ -390,7 +412,7 @@ function importMerge() {
       const r = mergeData(data);
       persist();
       const fmt = (o) => Object.entries(o).map(([l, n]) => n + ' ' + l).join(', ');
-      toast('✓ Hinzugefügt: ' + (fmt(r.added) || 'nichts') + (Object.keys(r.updated).length ? ' · aktualisiert: ' + fmt(r.updated) : '') + (r.areas.length ? ' · neue Bereiche: ' + r.areas.join(', ') : ''), 7000);
+      toast('✓ Hinzugefügt: ' + (fmt(r.added) || 'nichts') + (Object.keys(r.updated).length ? ' · aktualisiert: ' + fmt(r.updated) : '') + (r.areas.length ? ' · neue Bereiche: ' + r.areas.join(', ') : '') + (Object.keys(r.removed).length ? ' · entfernt: ' + fmt(r.removed) : '') + (r.settings.length ? ' · ' + r.settings.join(', ') : ''), 8000);
     }, null, 'Hinzufügen');
   });
   inp.click();

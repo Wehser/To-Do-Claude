@@ -368,6 +368,60 @@ details ul { font-size: .88rem; padding-left: 20px; }
 .week-day.holiday .week-head { color: var(--danger); }
 .holiday-name { display: block; font-weight: 500; font-size: .75rem; color: var(--danger); }
 
+/* Urlaub */
+.vacation-banner { background: color-mix(in srgb, #0ea5e9 14%, var(--surface)); border: 1px solid color-mix(in srgb, #0ea5e9 45%, var(--border)); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; font-weight: 600; }
+.week-day.vacation, .month-cell.vacation { background: color-mix(in srgb, #0ea5e9 9%, var(--surface)); }
+.vacation-name { display: block; font-weight: 500; font-size: .75rem; color: #0284c7; }
+
+/* Monatsansicht */
+.month { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; margin-bottom: 14px; }
+.month-wd { font-size: .78rem; color: var(--muted); text-align: center; padding: 2px 0; }
+.month-cell { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 5px; min-height: 108px; cursor: pointer; overflow: hidden; display: flex; flex-direction: column; gap: 2px; }
+.month-cell:hover { border-color: var(--primary); }
+.month-cell.other { opacity: .45; }
+.month-cell.weekend:not(.holiday):not(.vacation) { background: color-mix(in srgb, var(--text) 3%, var(--surface)); }
+.month-cell.today { box-shadow: 0 0 0 2px var(--primary); }
+.month-cell.holiday { background: color-mix(in srgb, var(--danger) 8%, var(--surface)); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.month-day { display: flex; justify-content: space-between; align-items: baseline; }
+.month-num { font-weight: 700; font-size: .9rem; }
+.month-cell.holiday .month-num { color: var(--danger); }
+.month-mark { font-size: .72rem; line-height: 1.2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exam-mark { color: var(--c-study); font-weight: 600; }
+.month-items .mini { font-size: .72rem; padding: 2px 4px; margin-bottom: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.month-more { font-size: .7rem; color: var(--muted); }
+.month-dots { display: none; gap: 3px; flex-wrap: wrap; }
+.month-dots i, .year-dots i, .legend-item i.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--k); display: inline-block; }
+.plain-list { margin: 0; padding-left: 4px; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+
+/* Jahresansicht */
+.year { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.year-month { margin-bottom: 0; padding: 10px; }
+.year-title { all: unset; cursor: pointer; font-weight: 700; display: block; margin-bottom: 6px; }
+.year-title:hover { color: var(--primary); }
+.year-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; text-align: center; }
+.year-wd { font-size: .65rem; color: var(--muted); }
+.year-day { border: 0; background: none; color: var(--text); font: inherit; font-size: .75rem; padding: 3px 0 1px; border-radius: 6px; cursor: pointer; display: flex; flex-direction: column; align-items: center; min-height: 30px; }
+.year-day:hover { background: color-mix(in srgb, var(--primary) 10%, transparent); }
+.year-day.weekend { color: var(--muted); }
+.year-day.holiday { background: color-mix(in srgb, var(--danger) 18%, transparent); color: var(--danger); font-weight: 700; }
+.year-day.vacation { background: color-mix(in srgb, #0ea5e9 20%, transparent); }
+.year-day.exam { box-shadow: inset 0 0 0 2px var(--c-study); font-weight: 700; }
+.year-day.today { background: var(--primary); color: #fff; }
+.year-dots { display: flex; gap: 2px; height: 6px; margin-top: 1px; }
+.year-dots i { width: 4px; height: 4px; }
+.legend-item i.lg-holiday { background: color-mix(in srgb, var(--danger) 30%, var(--surface)); }
+.legend-item i.lg-vacation { background: color-mix(in srgb, #0ea5e9 35%, var(--surface)); }
+.legend-item i.lg-exam { background: none; box-shadow: inset 0 0 0 2px var(--c-study); }
+
+@media (max-width: 700px) {
+  .month { gap: 2px; }
+  .month-cell { min-height: 58px; padding: 3px; border-radius: 7px; }
+  .month-items, .month-mark, .month-day small { display: none; }
+  .month-dots { display: flex; }
+  .month-cell.vacation .month-num::after { content: " 🏖️"; font-size: .6rem; }
+  .month-cell.holiday .month-num::after { content: " 🎉"; font-size: .6rem; }
+}
+
 /* Farben je Kategorie (am Ende, damit sie die Standardfarbe überschreiben) */
 .k-routine { --k: var(--c-routine); }
 .k-todo { --k: var(--c-todo); }

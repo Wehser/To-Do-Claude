@@ -7,9 +7,15 @@ if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').cat
 document.addEventListener('keydown', (e) => {
   if ($('#modal').open || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
   const step = state.view === 'week' || state.view === 'work' ? 7 : 1;
+  const move = (dir) => {
+    if (state.view === 'month') state.date = addMonths(state.date, dir);
+    else if (state.view === 'year') state.date = (parseYmd(state.date).getFullYear() + dir) + '-01-01';
+    else state.date = addDays(state.date, dir * step);
+    render();
+  };
   if (e.key === 'n') { e.preventDefault(); $('#fab').click(); }
-  else if (e.key === 'ArrowLeft') { state.date = addDays(state.date, -step); render(); }
-  else if (e.key === 'ArrowRight') { state.date = addDays(state.date, step); render(); }
+  else if (e.key === 'ArrowLeft') move(-1);
+  else if (e.key === 'ArrowRight') move(1);
   else if (e.key === 't') { state.date = today(); render(); }
 });
 
